@@ -9,6 +9,9 @@ struct MarkdownTextEditor: NSViewRepresentable {
     let backgroundColor: NSColor
     let lineSpacing: CGFloat
     let colorScheme: ColorScheme
+    let textInset: CGSize
+    let topInset: CGFloat
+    let bottomInset: CGFloat
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -22,7 +25,7 @@ struct MarkdownTextEditor: NSViewRepresentable {
         textView.allowsUndo = true
         textView.backgroundColor = backgroundColor
         textView.drawsBackground = true
-        textView.textContainerInset = NSSize(width: 4, height: 6)
+        textView.textContainerInset = NSSize(width: textInset.width, height: textInset.height)
         textView.textContainer?.lineFragmentPadding = 0
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
@@ -45,6 +48,8 @@ struct MarkdownTextEditor: NSViewRepresentable {
         scrollView.borderType = .noBorder
         scrollView.hasVerticalScroller = false
         scrollView.hasHorizontalScroller = false
+        scrollView.automaticallyAdjustsContentInsets = false
+        scrollView.contentInsets = NSEdgeInsets(top: topInset, left: 0, bottom: bottomInset, right: 0)
 
         context.coordinator.configure(textView: textView)
         return scrollView
@@ -64,6 +69,9 @@ struct MarkdownTextEditor: NSViewRepresentable {
 
         textView.backgroundColor = backgroundColor
         nsView.backgroundColor = backgroundColor
+        nsView.automaticallyAdjustsContentInsets = false
+        nsView.contentInsets = NSEdgeInsets(top: topInset, left: 0, bottom: bottomInset, right: 0)
+        textView.textContainerInset = NSSize(width: textInset.width, height: textInset.height)
 
         if textView.string != text {
             context.coordinator.isUpdating = true

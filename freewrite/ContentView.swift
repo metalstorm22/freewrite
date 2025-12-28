@@ -367,11 +367,6 @@ struct ContentView: View {
         return "\(Int(fontSize))px"
     }
     
-    var placeholderOffset: CGFloat {
-        // Instead of using calculated line height, use a simple offset
-        return fontSize / 2
-    }
-    
     // Add a color utility computed property
     var popoverBackgroundColor: Color {
         return colorScheme == .light ? Color(NSColor.controlBackgroundColor) : Color(NSColor.darkGray)
@@ -392,6 +387,9 @@ struct ContentView: View {
             ? NSColor(calibratedRed: 0.20, green: 0.20, blue: 0.20, alpha: 1.0)
             : NSColor(calibratedRed: 0.9, green: 0.9, blue: 0.9, alpha: 1.0)
         let editorBackgroundColor = colorScheme == .light ? NSColor.white : NSColor.black
+        let editorTopInset: CGFloat = 24
+        let editorBottomInset: CGFloat = 48
+        let editorTextInset = CGSize(width: 4, height: 6)
         
         HStack(spacing: 0) {
             // Main content
@@ -412,7 +410,10 @@ struct ContentView: View {
                         textColor: editorTextColor,
                         backgroundColor: editorBackgroundColor,
                         lineSpacing: lineHeight,
-                        colorScheme: colorScheme
+                        colorScheme: colorScheme,
+                        textInset: editorTextInset,
+                        topInset: editorTopInset,
+                        bottomInset: editorBottomInset
                     )
                     .background(Color(colorScheme == .light ? .white : .black))
                     .frame(maxWidth: 650)
@@ -432,10 +433,9 @@ struct ContentView: View {
                                 Text(placeholderText)
                                     .font(.custom(selectedFont, size: fontSize))
                                     .foregroundColor(colorScheme == .light ? .gray.opacity(0.5) : .gray.opacity(0.6))
-                                // .padding(.top, 8)
-                                // .padding(.leading, 8)
                                     .allowsHitTesting(false)
-                                    .offset(x: 5, y: placeholderOffset)
+                                    .padding(.top, editorTopInset + editorTextInset.height)
+                                    .padding(.leading, editorTextInset.width)
                             }
                         }, alignment: .topLeading
                     )
