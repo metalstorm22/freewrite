@@ -395,8 +395,6 @@ struct ContentView: View {
         return colorScheme == .light ? Color.primary : Color.white
     }
     
-    @State private var viewHeight: CGFloat = 0
-    
     var body: some View {
         let buttonBackground = colorScheme == .light ? Color.white : Color.black
         let navHeight: CGFloat = 68
@@ -406,15 +404,13 @@ struct ContentView: View {
             ? NSColor(calibratedRed: 0.20, green: 0.20, blue: 0.20, alpha: 1.0)
             : NSColor(calibratedRed: 0.9, green: 0.9, blue: 0.9, alpha: 1.0)
         let editorBackgroundColor = colorScheme == .light ? NSColor.white : NSColor.black
+        let editorContentWidth: CGFloat = 650
         let editorTopInset: CGFloat = 24
         let editorBottomInset: CGFloat = 48
         let editorTextInset = CGSize(width: 4, height: 6)
         let baseFont = NSFont(name: selectedFont, size: fontSize) ?? .systemFont(ofSize: fontSize)
         let baseLineHeight = getLineHeight(font: baseFont)
         let activeLineHeight = baseLineHeight + lineHeight
-        let typewriterExtraInset: CGFloat = typewriterMode == .typewriter
-            ? max(0, (viewHeight - activeLineHeight) / 2)
-            : 0
         
         HStack(spacing: 0) {
             // Main content
@@ -439,7 +435,7 @@ struct ContentView: View {
                         textInset: editorTextInset,
                         topInset: editorTopInset,
                         bottomInset: editorBottomInset,
-                        contentWidth: 650,
+                        contentWidth: editorContentWidth,
                         typewriterMode: typewriterMode,
                         highlightScope: typewriterHighlight,
                         fixedScrollEnabled: typewriterMode == .typewriter,
@@ -456,7 +452,13 @@ struct ContentView: View {
                     }
                     .overlay(
                         GeometryReader { geo in
-                            let horizontalPadding = max(0, (geo.size.width - 650) / 2)
+                            let scrollerWidth = NSScroller.scrollerWidth(for: .regular, scrollerStyle: .overlay)
+                            let availableWidth = geo.size.width - scrollerWidth
+                            let horizontalPadding = max(0, (availableWidth - editorContentWidth) / 2)
+                            let contentHeight = geo.size.height - editorTopInset - editorBottomInset
+                            let typewriterExtraInset = typewriterMode == .typewriter
+                                ? max(0, (contentHeight - activeLineHeight) / 2)
+                                : 0
                             ZStack(alignment: .topLeading) {
                                 if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                                     Text(placeholderText)
@@ -469,11 +471,6 @@ struct ContentView: View {
                             }
                         }, alignment: .topLeading
                     )
-                    .onGeometryChange(for: CGFloat.self) { proxy in
-                                    proxy.size.height
-                                } action: { height in
-                                    viewHeight = height
-                                }
                     
                 
                 VStack {

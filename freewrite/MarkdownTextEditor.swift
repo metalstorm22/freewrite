@@ -199,6 +199,8 @@ struct MarkdownTextEditor: NSViewRepresentable {
         if let typewriterTextView = textView as? TypewriterTextView {
             typewriterTextView.usesManualScrolling = typewriterMode == .typewriter && fixedScrollEnabled
         }
+        textView.layoutManager?.usesFontLeading = false
+        textView.enclosingScrollView?.usesPredominantAxisScrolling = false
         context.coordinator.updateConfig(
             fontName: fontName,
             fontSize: fontSize,
@@ -238,6 +240,8 @@ struct MarkdownTextEditor: NSViewRepresentable {
             overlayScrollView.installTrackingCallbacks()
         }
         
+        context.coordinator.performPendingResetIfNeeded()
+        
         if textView.string != text {
             context.coordinator.isUpdating = true
             let selectedRanges = textView.selectedRanges
@@ -255,6 +259,9 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
     private let highlighter = MarkdownHighlighter()
     private var config = MarkdownStyleConfig.defaultConfig()
     private var fixedScrollEnabled = false
+    private var wasTypewriterEnabled = false
+    private var pendingResetFromTypewriter = false
+    private var preTypewriterVisibleOrigin: NSPoint?
     weak var textView: NSTextView?
     weak var scrollView: NSScrollView?
     var isUpdating = false
@@ -271,6 +278,7 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
         markCurrentLine: Bool,
         fixedScrollEnabled: Bool
     ) {
+        wasTypewriterEnabled = config.typewriterEnabled
         config = MarkdownStyleConfig(
             fontName: fontName,
             fontSize: fontSize,
@@ -283,6 +291,11 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
             markCurrentLine: markCurrentLine
         )
         self.fixedScrollEnabled = fixedScrollEnabled
+        pendingResetFromTypewriter = wasTypewriterEnabled && !config.typewriterEnabled
+        if !wasTypewriterEnabled && config.typewriterEnabled,
+           let scrollView = scrollView {
+            preTypewriterVisibleOrigin = scrollView.documentVisibleRect.origin
+        }
     }
 
     func configure(textView: NSTextView) {
@@ -405,27 +418,24 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
     }
 
     private func applyFixedScrolling() {
-        guard config.typewriterEnabled else {
-            return
-        }
-        guard fixedScrollEnabled else {
-            return
-        }
+        guard config.typewriterEnabled else { return }
+        guard fixedScrollEnabled else { return }
         guard let textView = textView,
               let scrollView = scrollView,
-              let lineRect = currentLineRect(in: textView) else {
-            return
-        }
+              let lineRect = currentLineRect(in: textView) else { return }
 
         let visibleRect = scrollView.documentVisibleRect
         let anchorOffset = visibleRect.height * 0.5
-
         let desiredOriginY = lineRect.midY - anchorOffset
-        let maxOriginY = max(0, textView.bounds.height - visibleRect.height)
-        let clampedOriginY = min(max(desiredOriginY, 0), maxOriginY)
 
-        if abs(visibleRect.minY - clampedOriginY) > 0.5 {
-            scrollView.contentView.scroll(to: NSPoint(x: visibleRect.minX, y: clampedOriginY))
+        let halfLinePadding = max(0, lineRect.height * 0.5)
+        let paddedContentHeight = textView.bounds.height + halfLinePadding
+        let maxOriginY = max(0, paddedContentHeight - visibleRect.height)
+        let clampedOriginY = min(max(desiredOriginY, 0), maxOriginY)
+        let targetPoint = NSPoint(x: 0, y: clampedOriginY)
+
+        if abs(visibleRect.minY - clampedOriginY) > 0.5 || abs(visibleRect.minX - targetPoint.x) > 0.5 {
+            scrollView.contentView.scroll(to: targetPoint)
             scrollView.reflectScrolledClipView(scrollView.contentView)
         }
     }
@@ -455,6 +465,64 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
         rect.origin.x += textView.textContainerOrigin.x
         rect.origin.y += textView.textContainerOrigin.y
         return rect
+    }
+    
+    private func resetFromTypewriterMode() {
+        guard let textView = textView, let scrollView = scrollView else { return }
+        let selectionRange = textView.selectedRange()
+        DispatchQueue.main.async {
+            guard let caretRect = self.caretRect(for: selectionRange, in: textView) else {
+                textView.scrollRangeToVisible(selectionRange)
+                return
+            }
+            
+            let margin: CGFloat = 12
+            var targetRect = caretRect.insetBy(dx: 0, dy: -margin)
+            var visible = scrollView.documentVisibleRect
+            
+            let maxOriginY = max(0, textView.bounds.height - visible.height)
+            var newOriginY = visible.origin.y
+            
+            if targetRect.minY < visible.minY {
+                newOriginY = max(targetRect.minY, 0)
+            } else if targetRect.maxY > visible.maxY {
+                newOriginY = min(targetRect.maxY - visible.height, maxOriginY)
+            }
+            
+            if abs(newOriginY - visible.origin.y) > 0.5 {
+                visible.origin.y = newOriginY
+                scrollView.contentView.scroll(to: visible.origin)
+                scrollView.reflectScrolledClipView(scrollView.contentView)
+            }
+            
+            if let savedOrigin = self.preTypewriterVisibleOrigin {
+                var target = savedOrigin
+                let maxOriginY = max(0, textView.bounds.height - visible.height)
+                target.x = 0
+                target.y = min(max(target.y, 0), maxOriginY)
+                scrollView.contentView.scroll(to: target)
+                scrollView.reflectScrolledClipView(scrollView.contentView)
+                self.preTypewriterVisibleOrigin = nil
+            }
+        }
+    }
+    
+    private func caretRect(for range: NSRange, in textView: NSTextView) -> NSRect? {
+        guard let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer else { return nil }
+        let location = max(0, min(range.location, textView.string.count > 0 ? textView.string.count - 1 : 0))
+        let glyphIndex = layoutManager.glyphIndexForCharacter(at: location)
+        var rect = layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
+        let origin = textView.textContainerOrigin
+        rect.origin.x += origin.x
+        rect.origin.y += origin.y
+        return rect
+    }
+    
+    func performPendingResetIfNeeded() {
+        guard pendingResetFromTypewriter else { return }
+        pendingResetFromTypewriter = false
+        resetFromTypewriterMode()
     }
 }
 
