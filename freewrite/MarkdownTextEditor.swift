@@ -13,7 +13,39 @@ final class TypewriterTextView: NSTextView {
 
 }
 
-final class AutoHideScrollView: NSScrollView {
+final class TrackingScroller: NSScroller {
+    var onBeginTracking: (() -> Void)?
+    var onEndTracking: (() -> Void)?
+    
+    override func trackKnob(with event: NSEvent) {
+        onBeginTracking?()
+        super.trackKnob(with: event)
+        onEndTracking?()
+    }
+    
+    override func mouseDown(with event: NSEvent) {
+        onBeginTracking?()
+        super.mouseDown(with: event)
+    }
+    
+    override func mouseUp(with event: NSEvent) {
+        super.mouseUp(with: event)
+        onEndTracking?()
+    }
+
+    override func drawKnobSlot(in slotRect: NSRect, highlight flag: Bool) {
+        // Skip drawing the track to avoid visible edges.
+    }
+
+    override func drawKnob() {
+        let knobRect = self.rect(for: .knob).insetBy(dx: 1, dy: 1)
+        let path = NSBezierPath(roundedRect: knobRect, xRadius: 3, yRadius: 3)
+        (NSColor.labelColor.withAlphaComponent(0.45)).setFill()
+        path.fill()
+    }
+}
+
+final class OverlayScrollView: NSScrollView {
     private var hideWorkItem: DispatchWorkItem?
     private let hideDelay: TimeInterval = 1.2
     private var isDraggingScroller = false
@@ -24,29 +56,29 @@ final class AutoHideScrollView: NSScrollView {
         scheduleHide()
     }
     
-    override func mouseDown(with event: NSEvent) {
-        if isEventOnScroller(event) || isEventInScrollerGutter(event) {
-            isDraggingScroller = true
-            hideWorkItem?.cancel()
-            showScroller()
-        }
-        super.mouseDown(with: event)
-    }
-    
-    override func mouseDragged(with event: NSEvent) {
-        if isDraggingScroller {
-            showScroller()
-            hideWorkItem?.cancel()
-        }
-        super.mouseDragged(with: event)
-    }
-    
-    override func mouseUp(with event: NSEvent) {
-        super.mouseUp(with: event)
-        isDraggingScroller = false
+    override func reflectScrolledClipView(_ cView: NSClipView) {
+        showScroller()
+        super.reflectScrolledClipView(cView)
         scheduleHide()
     }
-
+    
+    func installTrackingCallbacks() {
+        guard let trackingScroller = verticalScroller as? TrackingScroller else { return }
+        trackingScroller.onBeginTracking = { [weak self] in
+            self?.isDraggingScroller = true
+            self?.hideWorkItem?.cancel()
+            self?.showScroller()
+        }
+        trackingScroller.onEndTracking = { [weak self] in
+            self?.isDraggingScroller = false
+            self?.scheduleHide()
+        }
+    }
+    
+    func prepareInitialHide() {
+        hideScroller()
+    }
+    
     private func showScroller() {
         guard let scroller = verticalScroller else { return }
         scroller.isHidden = false
@@ -56,6 +88,9 @@ final class AutoHideScrollView: NSScrollView {
     private func hideScroller() {
         guard let scroller = verticalScroller else { return }
         scroller.animator().alphaValue = 0.0
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak scroller] in
+            scroller?.isHidden = true
+        }
     }
     
     private func scheduleHide() {
@@ -66,21 +101,6 @@ final class AutoHideScrollView: NSScrollView {
         }
         hideWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + hideDelay, execute: work)
-    }
-    
-    func prepareInitialHide() {
-        hideScroller()
-    }
-    
-    private func isEventOnScroller(_ event: NSEvent) -> Bool {
-        guard let scroller = verticalScroller else { return false }
-        let localPoint = scroller.convert(event.locationInWindow, from: nil)
-        return scroller.bounds.contains(localPoint)
-    }
-    
-    private func isEventInScrollerGutter(_ event: NSEvent) -> Bool {
-        let pointInScrollView = convert(event.locationInWindow, from: nil)
-        return pointInScrollView.x >= bounds.width - 32
     }
 }
 
@@ -149,9 +169,9 @@ struct MarkdownTextEditor: NSViewRepresentable {
         textView.delegate = context.coordinator
         textView.textStorage?.delegate = context.coordinator
 
-        let scrollView = AutoHideScrollView(frame: .zero)
+        let scrollView = OverlayScrollView(frame: .zero)
         scrollView.documentView = textView
-        scrollView.drawsBackground = true
+        scrollView.drawsBackground = false
         scrollView.backgroundColor = backgroundColor
         scrollView.borderType = .noBorder
         scrollView.hasVerticalScroller = true
@@ -160,13 +180,19 @@ struct MarkdownTextEditor: NSViewRepresentable {
         scrollView.verticalScrollElasticity = .automatic
         scrollView.hasHorizontalScroller = false
         scrollView.automaticallyAdjustsContentInsets = false
-        scrollView.contentInsets = NSEdgeInsets(top: topInset, left: 0, bottom: bottomInset, right: 10)
-        scrollView.scrollerInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 2)
-        if let scroller = scrollView.verticalScroller {
-            scroller.controlSize = .mini
-            scroller.scrollerStyle = .overlay
-            scroller.alphaValue = 0.0
-        }
+        scrollView.contentInsets = NSEdgeInsets(top: topInset, left: 0, bottom: bottomInset, right: 6)
+        scrollView.scrollerInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: -4)
+        let trackingScroller = TrackingScroller()
+        trackingScroller.controlSize = .mini
+        trackingScroller.scrollerStyle = .overlay
+        trackingScroller.knobStyle = .default
+        trackingScroller.alphaValue = 0.0
+        trackingScroller.wantsLayer = true
+        trackingScroller.layer?.masksToBounds = true
+        trackingScroller.layer?.cornerRadius = 3
+        trackingScroller.layer?.backgroundColor = NSColor.clear.cgColor
+        scrollView.verticalScroller = trackingScroller
+        scrollView.installTrackingCallbacks()
         scrollView.prepareInitialHide()
 
         context.coordinator.configure(textView: textView)
@@ -195,7 +221,7 @@ struct MarkdownTextEditor: NSViewRepresentable {
         textView.backgroundColor = backgroundColor
         nsView.backgroundColor = backgroundColor
         nsView.automaticallyAdjustsContentInsets = false
-        nsView.contentInsets = NSEdgeInsets(top: topInset, left: 0, bottom: bottomInset, right: 0)
+        nsView.contentInsets = NSEdgeInsets(top: topInset, left: 0, bottom: bottomInset, right: 6)
         let baseFont = NSFont(name: fontName, size: fontSize) ?? .systemFont(ofSize: fontSize)
         let baseLineHeight = baseFont.ascender - baseFont.descender + baseFont.leading
         let activeLineHeight = baseLineHeight + lineSpacing
@@ -213,7 +239,11 @@ struct MarkdownTextEditor: NSViewRepresentable {
         if let textContainer = textView.textContainer {
             textContainer.containerSize = NSSize(width: contentWidth, height: CGFloat.greatestFiniteMagnitude)
         }
-
+        
+        if let overlayScrollView = nsView as? OverlayScrollView {
+            overlayScrollView.installTrackingCallbacks()
+        }
+        
         if textView.string != text {
             context.coordinator.isUpdating = true
             let selectedRanges = textView.selectedRanges
