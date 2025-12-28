@@ -86,6 +86,7 @@ struct ContentView: View {
     @State private var typewriterMode: TypewriterMode = .normal
     @State private var typewriterHighlight: TypewriterHighlightScope = .line
     @State private var isHoveringTypewriter = false
+    @State private var isHoveringTypewriterHighlight = false
     let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     let entryHeight: CGFloat = 40
     
@@ -373,6 +374,18 @@ struct ContentView: View {
         fontOptions.first(where: { $0.value == selectedFont })?.label ?? "Font"
     }
     
+    private func cycleTypewriterMode() {
+        guard let currentIndex = TypewriterMode.allCases.firstIndex(of: typewriterMode) else { return }
+        let nextIndex = (currentIndex + 1) % TypewriterMode.allCases.count
+        typewriterMode = TypewriterMode.allCases[nextIndex]
+    }
+    
+    private func cycleHighlightScope() {
+        guard let currentIndex = TypewriterHighlightScope.allCases.firstIndex(of: typewriterHighlight) else { return }
+        let nextIndex = (currentIndex + 1) % TypewriterHighlightScope.allCases.count
+        typewriterHighlight = TypewriterHighlightScope.allCases[nextIndex]
+    }
+    
     // Add a color utility computed property
     var popoverBackgroundColor: Color {
         return colorScheme == .light ? Color(NSColor.controlBackgroundColor) : Color(NSColor.darkGray)
@@ -506,23 +519,9 @@ struct ContentView: View {
                             Text("•")
                                 .foregroundColor(.gray)
 
-                            Menu {
-                                Picker("Mode", selection: $typewriterMode) {
-                                    ForEach(TypewriterMode.allCases) { mode in
-                                        Text(mode.rawValue).tag(mode)
-                                    }
-                                }
-                                Divider()
-                                Picker("Highlight", selection: $typewriterHighlight) {
-                                    ForEach(TypewriterHighlightScope.allCases) { option in
-                                        Text(option.rawValue).tag(option)
-                                    }
-                                }
-                                .disabled(typewriterMode == .normal)
-                            } label: {
-                                Text(typewriterMode.rawValue)
+                            Button(typewriterMode.rawValue) {
+                                cycleTypewriterMode()
                             }
-                            .menuStyle(BorderlessButtonMenuStyle())
                             .buttonStyle(.plain)
                             .foregroundColor(isHoveringTypewriter ? textHoverColor : textColor)
                             .onHover { hovering in
@@ -532,6 +531,26 @@ struct ContentView: View {
                                     NSCursor.pointingHand.push()
                                 } else {
                                     NSCursor.pop()
+                                }
+                            }
+                            
+                            if typewriterMode == .typewriter {
+                                Text("•")
+                                    .foregroundColor(.gray)
+                                
+                                Button(typewriterHighlight.rawValue) {
+                                    cycleHighlightScope()
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundColor(isHoveringTypewriterHighlight ? textHoverColor : textColor)
+                                .onHover { hovering in
+                                    isHoveringTypewriterHighlight = hovering
+                                    isHoveringBottomNav = hovering
+                                    if hovering {
+                                        NSCursor.pointingHand.push()
+                                    } else {
+                                        NSCursor.pop()
+                                    }
                                 }
                             }
                         }
