@@ -389,6 +389,10 @@ struct ContentView: View {
         let navHeight: CGFloat = 68
         let textColor = colorScheme == .light ? Color.gray : Color.gray.opacity(0.8)
         let textHoverColor = colorScheme == .light ? Color.black : Color.white
+        let editorTextColor = colorScheme == .light
+            ? NSColor(calibratedRed: 0.20, green: 0.20, blue: 0.20, alpha: 1.0)
+            : NSColor(calibratedRed: 0.9, green: 0.9, blue: 0.9, alpha: 1.0)
+        let editorBackgroundColor = colorScheme == .light ? NSColor.white : NSColor.black
         
         HStack(spacing: 0) {
             // Main content
@@ -397,23 +401,26 @@ struct ContentView: View {
                     .ignoresSafeArea()
                 
               
-                    TextEditor(text: Binding(
-                        get: { text },
-                        set: { newValue in
-                            // Ensure the text always starts with two newlines
-                            if !newValue.hasPrefix("\n\n") {
-                                text = "\n\n" + newValue.trimmingCharacters(in: .newlines)
-                            } else {
-                                text = newValue
+                    MarkdownTextEditor(
+                        text: Binding(
+                            get: { text },
+                            set: { newValue in
+                                // Ensure the text always starts with two newlines
+                                if !newValue.hasPrefix("\n\n") {
+                                    text = "\n\n" + newValue.trimmingCharacters(in: .newlines)
+                                } else {
+                                    text = newValue
+                                }
                             }
-                        }
-                    ))
+                        ),
+                        fontName: selectedFont,
+                        fontSize: fontSize,
+                        textColor: editorTextColor,
+                        backgroundColor: editorBackgroundColor,
+                        lineSpacing: lineHeight,
+                        colorScheme: colorScheme
+                    )
                     .background(Color(colorScheme == .light ? .white : .black))
-                    .font(.custom(selectedFont, size: fontSize))
-                    .foregroundColor(colorScheme == .light ? Color(red: 0.20, green: 0.20, blue: 0.20) : Color(red: 0.9, green: 0.9, blue: 0.9))
-                    .scrollContentBackground(.hidden)
-                    .scrollIndicators(.never)
-                    .lineSpacing(lineHeight)
                     .frame(maxWidth: 650)
                     
           

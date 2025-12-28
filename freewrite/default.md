@@ -98,7 +98,7 @@ It’ll push your entry to ChatGPT or Claude via a query parameter to help you r
 
 Maybe start with 5m or 10m if 15m feels like a lot. For longer sessions where I’m writing scripts or brainstorming, I do 25m.
 
-3. There is no spellcheck. There is no markdown. This is on purpose. It doesn’t matter.
+3. There is no spellcheck. Markdown XL is supported (Ulysses-style), but it stays out of your way.
 
 4. I’ve always felt that the font and size should reflect the mood of my writing. I’m kinda weird like that. But maybe there are other weird people like me out there haha.
 
