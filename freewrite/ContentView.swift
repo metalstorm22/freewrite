@@ -44,7 +44,6 @@ struct HeartEmoji: Identifiable {
 }
 
 struct ContentView: View {
-    private let headerString = "\n\n"
     @State private var entries: [HumanEntry] = []
     @State private var text: String = ""  // Remove initial welcome text since we'll handle it in createNewEntry
     
@@ -92,14 +91,14 @@ struct ContentView: View {
     let standardFonts = ["Lato-Regular", "Arial", ".AppleSystemUIFont", "Times New Roman"]
     let fontSizes: [CGFloat] = [16, 18, 20, 22, 24, 26]
     let placeholderOptions = [
-        "\n\nBegin writing",
-        "\n\nPick a thought and go",
-        "\n\nStart typing",
-        "\n\nWhat's on your mind",
-        "\n\nJust start",
-        "\n\nType your first thought",
-        "\n\nStart with one sentence",
-        "\n\nJust say it"
+        "Begin writing",
+        "Pick a thought and go",
+        "Start typing",
+        "What's on your mind",
+        "Just start",
+        "Type your first thought",
+        "Start with one sentence",
+        "Just say it"
     ]
     
     // Add file manager and save timer
@@ -405,12 +404,7 @@ struct ContentView: View {
                         text: Binding(
                             get: { text },
                             set: { newValue in
-                                // Ensure the text always starts with two newlines
-                                if !newValue.hasPrefix("\n\n") {
-                                    text = "\n\n" + newValue.trimmingCharacters(in: .newlines)
-                                } else {
-                                    text = newValue
-                                }
+                                text = newValue
                             }
                         ),
                         fontName: selectedFont,
@@ -429,7 +423,7 @@ struct ContentView: View {
                     .ignoresSafeArea()
                     .colorScheme(colorScheme)
                     .onAppear {
-                        placeholderText = placeholderOptions.randomElement() ?? "\n\nBegin writing"
+                        placeholderText = placeholderOptions.randomElement() ?? "Begin writing"
                         // Removed findSubview code which was causing errors
                     }
                     .overlay(
@@ -1141,7 +1135,7 @@ struct ContentView: View {
             // Read welcome message from default.md
             if let defaultMessageURL = Bundle.main.url(forResource: "default", withExtension: "md"),
                let defaultMessage = try? String(contentsOf: defaultMessageURL, encoding: .utf8) {
-                text = "\n\n" + defaultMessage
+                text = defaultMessage
             }
             // Save the welcome message immediately
             saveEntry(entry: newEntry)
@@ -1149,9 +1143,9 @@ struct ContentView: View {
             updatePreviewText(for: newEntry)
         } else {
             // Regular new entry starts with newlines
-            text = "\n\n"
+            text = ""
             // Randomize placeholder text for new entry
-            placeholderText = placeholderOptions.randomElement() ?? "\n\nBegin writing"
+            placeholderText = placeholderOptions.randomElement() ?? "Begin writing"
             // Save the empty entry
             saveEntry(entry: newEntry)
         }

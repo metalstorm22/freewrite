@@ -117,7 +117,8 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
     func applyHighlighting(to textView: NSTextView) {
         guard let textStorage = textView.textStorage else { return }
         let selectedRanges = textView.selectedRanges
-        highlighter.apply(to: textStorage, config: config)
+        let activeRange = activeLineRange(for: textView)
+        highlighter.apply(to: textStorage, config: config, activeRange: activeRange)
         textView.insertionPointColor = config.textColor
         textView.typingAttributes = [
             .font: config.baseFont,
@@ -125,6 +126,27 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
             .paragraphStyle: config.paragraphStyle
         ]
         textView.selectedRanges = selectedRanges
+    }
+
+    func textViewDidChangeSelection(_ notification: Notification) {
+        guard let textView = notification.object as? NSTextView else { return }
+        guard !isUpdating else { return }
+        isUpdating = true
+        applyHighlighting(to: textView)
+        isUpdating = false
+    }
+
+    private func activeLineRange(for textView: NSTextView) -> NSRange? {
+        guard let selectionValue = textView.selectedRanges.first as? NSValue else { return nil }
+        let selectionRange = selectionValue.rangeValue
+        guard selectionRange.location != NSNotFound else { return nil }
+        let text = textView.string as NSString
+        if text.length == 0 {
+            return nil
+        }
+        let boundedLocation = min(selectionRange.location, max(0, text.length - 1))
+        let adjustedRange = NSRange(location: boundedLocation, length: selectionRange.length)
+        return text.lineRange(for: adjustedRange)
     }
 }
 
@@ -142,6 +164,15 @@ private struct MarkdownStyleConfig {
 
     var tokenColor: NSColor {
         textColor.withAlphaComponent(colorScheme == .dark ? 0.45 : 0.35)
+    }
+
+    var hiddenTokenColor: NSColor {
+        backgroundColor
+    }
+
+    var hiddenTokenFont: NSFont {
+        let size = max(0.1, fontSize * 0.05)
+        return NSFont(name: fontName, size: size) ?? .systemFont(ofSize: size)
     }
 
     var mutedTextColor: NSColor {
@@ -204,7 +235,7 @@ private struct MarkdownStyleConfig {
 
 private final class MarkdownHighlighter {
     private let headingRegex = try! NSRegularExpression(
-        pattern: "^(#{1,6})\\s+(.+)$",
+        pattern: "^(#{1,6}\\s+)(.+)$",
         options: [.anchorsMatchLines]
     )
     private let boldRegex = try! NSRegularExpression(pattern: "\\*\\*([^\\n]+?)\\*\\*")
@@ -215,21 +246,21 @@ private final class MarkdownHighlighter {
     private let deleteRegex = try! NSRegularExpression(pattern: "\\|\\|([^\\n]+?)\\|\\|")
     private let inlineCommentRegex = try! NSRegularExpression(pattern: "\\+\\+([^\\n]+?)\\+\\+")
     private let blockCommentRegex = try! NSRegularExpression(
-        pattern: "^%%(.*)$",
+        pattern: "^(%%\\s*)(.*)$",
         options: [.anchorsMatchLines]
     )
     private let annotationRegex = try! NSRegularExpression(pattern: "\\{([^\\n]+?)\\}")
     private let linkRegex = try! NSRegularExpression(pattern: "\\[([^\\n\\]]+?)\\]")
     private let quoteRegex = try! NSRegularExpression(
-        pattern: "^>\\s+(.*)$",
+        pattern: "^(>\\s+)(.*)$",
         options: [.anchorsMatchLines]
     )
     private let dividerRegex = try! NSRegularExpression(
         pattern: "^----\\s*$",
         options: [.anchorsMatchLines]
     )
-    private let footnoteRegex = try! NSRegularExpression(pattern: "\\(fn\\)")
-    private let imageRegex = try! NSRegularExpression(pattern: "\\(img\\)")
+    private let footnoteRegex = try! NSRegularExpression(pattern: "\\((fn)\\)")
+    private let imageRegex = try! NSRegularExpression(pattern: "\\((img)\\)")
     private let inlineCodeRegex = try! NSRegularExpression(
         pattern: "(?<!\\w)'([^\\n']+?)'(?!\\w)"
     )
@@ -237,18 +268,18 @@ private final class MarkdownHighlighter {
         pattern: "`([^\\n`]+?)`"
     )
     private let codeBlockRegex = try! NSRegularExpression(
-        pattern: "^''\\s*(.*)$",
+        pattern: "^(\\'\\'\\s*)(.*)$",
         options: [.anchorsMatchLines]
     )
     private let rawInlineRegex = try! NSRegularExpression(
         pattern: "(?<!~)~([^\\n~]+?)~(?!~)"
     )
     private let rawBlockRegex = try! NSRegularExpression(
-        pattern: "^~~\\s*(.*)$",
+        pattern: "^(~~\\s*)(.*)$",
         options: [.anchorsMatchLines]
     )
 
-    func apply(to textStorage: NSTextStorage, config: MarkdownStyleConfig) {
+    func apply(to textStorage: NSTextStorage, config: MarkdownStyleConfig, activeRange: NSRange?) {
         let fullRange = NSRange(location: 0, length: textStorage.length)
         let baseAttributes: [NSAttributedString.Key: Any] = [
             .font: config.baseFont,
@@ -259,12 +290,13 @@ private final class MarkdownHighlighter {
 
         let text = textStorage.string as NSString
 
-        applyHeadings(text, textStorage: textStorage, config: config)
+        applyHeadings(text, textStorage: textStorage, config: config, activeRange: activeRange)
         applyInlinePattern(
             boldRegex,
             text: text,
             textStorage: textStorage,
             config: config,
+            activeRange: activeRange,
             contentAttributes: [.font: withTraits(config.baseFont, traits: .boldFontMask)]
         )
         applyInlinePattern(
@@ -272,6 +304,7 @@ private final class MarkdownHighlighter {
             text: text,
             textStorage: textStorage,
             config: config,
+            activeRange: activeRange,
             contentAttributes: [.font: withTraits(config.baseFont, traits: .italicFontMask)]
         )
         applyInlinePattern(
@@ -279,6 +312,7 @@ private final class MarkdownHighlighter {
             text: text,
             textStorage: textStorage,
             config: config,
+            activeRange: activeRange,
             contentAttributes: [
                 .backgroundColor: config.markBackground
             ]
@@ -288,6 +322,7 @@ private final class MarkdownHighlighter {
             text: text,
             textStorage: textStorage,
             config: config,
+            activeRange: activeRange,
             contentAttributes: [
                 .foregroundColor: config.deletionColor,
                 .strikethroughStyle: NSUnderlineStyle.single.rawValue
@@ -298,6 +333,7 @@ private final class MarkdownHighlighter {
             text: text,
             textStorage: textStorage,
             config: config,
+            activeRange: activeRange,
             contentAttributes: [
                 .foregroundColor: config.mutedTextColor,
                 .backgroundColor: config.commentBackground,
@@ -309,6 +345,7 @@ private final class MarkdownHighlighter {
             text: text,
             textStorage: textStorage,
             config: config,
+            activeRange: activeRange,
             contentAttributes: [
                 .backgroundColor: config.annotationBackground
             ]
@@ -318,6 +355,7 @@ private final class MarkdownHighlighter {
             text: text,
             textStorage: textStorage,
             config: config,
+            activeRange: activeRange,
             contentAttributes: [
                 .foregroundColor: config.linkColor,
                 .underlineStyle: NSUnderlineStyle.single.rawValue
@@ -328,6 +366,7 @@ private final class MarkdownHighlighter {
             text: text,
             textStorage: textStorage,
             config: config,
+            activeRange: activeRange,
             contentAttributes: [
                 .font: NSFont.monospacedSystemFont(ofSize: config.fontSize * 0.95, weight: .regular),
                 .foregroundColor: config.codeColor,
@@ -339,6 +378,7 @@ private final class MarkdownHighlighter {
             text: text,
             textStorage: textStorage,
             config: config,
+            activeRange: activeRange,
             contentAttributes: [
                 .font: NSFont.monospacedSystemFont(ofSize: config.fontSize * 0.95, weight: .regular),
                 .foregroundColor: config.codeColor,
@@ -350,6 +390,7 @@ private final class MarkdownHighlighter {
             text: text,
             textStorage: textStorage,
             config: config,
+            activeRange: activeRange,
             contentAttributes: [
                 .font: NSFont.monospacedSystemFont(ofSize: config.fontSize * 0.95, weight: .regular),
                 .foregroundColor: config.codeColor,
@@ -362,6 +403,7 @@ private final class MarkdownHighlighter {
             text: text,
             textStorage: textStorage,
             config: config,
+            activeRange: activeRange,
             lineAttributes: [
                 .foregroundColor: config.mutedTextColor,
                 .backgroundColor: config.commentBackground,
@@ -375,6 +417,7 @@ private final class MarkdownHighlighter {
             text: text,
             textStorage: textStorage,
             config: config,
+            activeRange: activeRange,
             lineAttributes: [
                 .foregroundColor: config.quoteColor,
                 .font: withTraits(config.baseFont, traits: .italicFontMask)
@@ -388,6 +431,7 @@ private final class MarkdownHighlighter {
             text: text,
             textStorage: textStorage,
             config: config,
+            activeRange: activeRange,
             lineAttributes: [
                 .font: NSFont.monospacedSystemFont(ofSize: config.fontSize * 0.95, weight: .regular),
                 .foregroundColor: config.codeColor,
@@ -401,6 +445,7 @@ private final class MarkdownHighlighter {
             text: text,
             textStorage: textStorage,
             config: config,
+            activeRange: activeRange,
             lineAttributes: [
                 .font: NSFont.monospacedSystemFont(ofSize: config.fontSize * 0.95, weight: .regular),
                 .foregroundColor: config.codeColor,
@@ -409,43 +454,51 @@ private final class MarkdownHighlighter {
             tokenLength: 2
         )
 
-        applySimplePattern(
+        applyInlinePattern(
             footnoteRegex,
             text: text,
             textStorage: textStorage,
-            attributes: [
-                .foregroundColor: config.linkColor
+            config: config,
+            activeRange: activeRange,
+            contentAttributes: [
+                .foregroundColor: config.linkColor,
+                .font: withTraits(config.baseFont, traits: .boldFontMask)
             ]
         )
 
-        applySimplePattern(
+        applyInlinePattern(
             imageRegex,
             text: text,
             textStorage: textStorage,
-            attributes: [
-                .foregroundColor: config.linkColor
+            config: config,
+            activeRange: activeRange,
+            contentAttributes: [
+                .foregroundColor: config.linkColor,
+                .font: withTraits(config.baseFont, traits: .boldFontMask)
             ]
         )
 
-        applySimplePattern(
+        applyTokenPattern(
             dividerRegex,
             text: text,
             textStorage: textStorage,
-            attributes: [
-                .foregroundColor: config.tokenColor
-            ]
+            config: config,
+            activeRange: activeRange
         )
     }
 
     private func applyHeadings(
         _ text: NSString,
         textStorage: NSTextStorage,
-        config: MarkdownStyleConfig
+        config: MarkdownStyleConfig,
+        activeRange: NSRange?
     ) {
         headingRegex.matches(in: text as String, range: NSRange(location: 0, length: text.length)).forEach { match in
-            let hashesRange = match.range(at: 1)
-            let contentRange = match.range(at: 2)
-            let level = min(hashesRange.length, 4)
+        let prefixRange = match.range(at: 1)
+        let contentRange = match.range(at: 2)
+        let prefixText = text.substring(with: prefixRange)
+        let hashCount = prefixText.filter { $0 == "#" }.count
+        let level = min(max(hashCount, 1), 4)
             let scale: CGFloat
             switch level {
             case 1:
@@ -473,9 +526,10 @@ private final class MarkdownHighlighter {
             )
             textStorage.addAttributes(
                 [
-                    .foregroundColor: config.tokenColor
+                    .foregroundColor: tokenColor(config: config, activeRange: activeRange, tokenRange: prefixRange),
+                    .font: tokenFont(config: config, activeRange: activeRange, tokenRange: prefixRange)
                 ],
-                range: hashesRange
+                range: prefixRange
             )
         }
     }
@@ -485,6 +539,7 @@ private final class MarkdownHighlighter {
         text: NSString,
         textStorage: NSTextStorage,
         config: MarkdownStyleConfig,
+        activeRange: NSRange?,
         contentAttributes: [NSAttributedString.Key: Any]
     ) {
         regex.matches(in: text as String, range: NSRange(location: 0, length: text.length)).forEach { match in
@@ -498,13 +553,41 @@ private final class MarkdownHighlighter {
 
             if leadingTokenLength > 0 {
                 textStorage.addAttributes(
-                    [.foregroundColor: config.tokenColor],
+                    [
+                        .foregroundColor: tokenColor(
+                            config: config,
+                            activeRange: activeRange,
+                            tokenRange: NSRange(location: fullRange.location, length: leadingTokenLength)
+                        ),
+                        .font: tokenFont(
+                            config: config,
+                            activeRange: activeRange,
+                            tokenRange: NSRange(location: fullRange.location, length: leadingTokenLength)
+                        )
+                    ],
                     range: NSRange(location: fullRange.location, length: leadingTokenLength)
                 )
             }
             if trailingTokenLength > 0 {
                 textStorage.addAttributes(
-                    [.foregroundColor: config.tokenColor],
+                    [
+                        .foregroundColor: tokenColor(
+                            config: config,
+                            activeRange: activeRange,
+                            tokenRange: NSRange(
+                                location: fullRange.location + fullRange.length - trailingTokenLength,
+                                length: trailingTokenLength
+                            )
+                        ),
+                        .font: tokenFont(
+                            config: config,
+                            activeRange: activeRange,
+                            tokenRange: NSRange(
+                                location: fullRange.location + fullRange.length - trailingTokenLength,
+                                length: trailingTokenLength
+                            )
+                        )
+                    ],
                     range: NSRange(
                         location: fullRange.location + fullRange.length - trailingTokenLength,
                         length: trailingTokenLength
@@ -519,20 +602,26 @@ private final class MarkdownHighlighter {
         text: NSString,
         textStorage: NSTextStorage,
         config: MarkdownStyleConfig,
+        activeRange: NSRange?,
         lineAttributes: [NSAttributedString.Key: Any],
         tokenLength: Int,
         indent: CGFloat = 0
     ) {
         regex.matches(in: text as String, range: NSRange(location: 0, length: text.length)).forEach { match in
             let fullRange = match.range(at: 0)
+            let prefixRange = match.numberOfRanges > 1 ? match.range(at: 1) : NSRange(location: fullRange.location, length: tokenLength)
+            let isActiveLine = activeRange.map { NSIntersectionRange(fullRange, $0).length > 0 } ?? false
             textStorage.addAttributes(lineAttributes, range: fullRange)
             if tokenLength > 0, fullRange.length >= tokenLength {
                 textStorage.addAttributes(
-                    [.foregroundColor: config.tokenColor],
-                    range: NSRange(location: fullRange.location, length: tokenLength)
+                    [
+                        .foregroundColor: tokenColor(config: config, activeRange: activeRange, tokenRange: prefixRange),
+                        .font: tokenFont(config: config, activeRange: activeRange, tokenRange: prefixRange)
+                    ],
+                    range: prefixRange
                 )
             }
-            if indent > 0 {
+            if indent > 0, isActiveLine {
                 let paragraph = NSMutableParagraphStyle()
                 paragraph.headIndent = indent
                 paragraph.firstLineHeadIndent = indent
@@ -542,19 +631,52 @@ private final class MarkdownHighlighter {
         }
     }
 
-    private func applySimplePattern(
+    private func applyTokenPattern(
         _ regex: NSRegularExpression,
         text: NSString,
         textStorage: NSTextStorage,
-        attributes: [NSAttributedString.Key: Any]
+        config: MarkdownStyleConfig,
+        activeRange: NSRange?
     ) {
         regex.matches(in: text as String, range: NSRange(location: 0, length: text.length)).forEach { match in
-            textStorage.addAttributes(attributes, range: match.range)
+            textStorage.addAttributes(
+                [
+                    .foregroundColor: tokenColor(config: config, activeRange: activeRange, tokenRange: match.range),
+                    .font: tokenFont(config: config, activeRange: activeRange, tokenRange: match.range)
+                ],
+                range: match.range
+            )
         }
     }
 
+    private func tokenColor(config: MarkdownStyleConfig, activeRange: NSRange?, tokenRange: NSRange) -> NSColor {
+        guard let activeRange else { return config.tokenColor }
+        let intersection = NSIntersectionRange(activeRange, tokenRange)
+        return intersection.length > 0 ? config.tokenColor : config.hiddenTokenColor
+    }
+
+    private func tokenFont(config: MarkdownStyleConfig, activeRange: NSRange?, tokenRange: NSRange) -> NSFont {
+        guard let activeRange else { return config.baseFont }
+        let intersection = NSIntersectionRange(activeRange, tokenRange)
+        return intersection.length > 0 ? config.baseFont : config.hiddenTokenFont
+    }
+
     private func withTraits(_ font: NSFont, traits: NSFontTraitMask) -> NSFont {
-        NSFontManager.shared.convert(font, toHaveTrait: traits)
+        let converted = NSFontManager.shared.convert(font, toHaveTrait: traits)
+        let convertedTraits = NSFontManager.shared.traits(of: converted)
+        if convertedTraits.contains(traits) {
+            return converted
+        }
+
+        switch traits {
+        case .boldFontMask:
+            return NSFont.systemFont(ofSize: font.pointSize, weight: .bold)
+        case .italicFontMask:
+            let fallback = NSFont.systemFont(ofSize: font.pointSize)
+            return NSFontManager.shared.convert(fallback, toHaveTrait: .italicFontMask)
+        default:
+            return converted
+        }
     }
 }
 
