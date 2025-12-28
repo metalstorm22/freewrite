@@ -1,6 +1,30 @@
 import AppKit
 import SwiftUI
 
+enum TypewriterMode: String, CaseIterable, Identifiable {
+    case normal = "Normal"
+    case typewriter = "Typewriter"
+
+    var id: String { rawValue }
+}
+
+enum TypewriterHighlightScope: String, CaseIterable, Identifiable {
+    case line = "Line"
+    case sentence = "Sentence"
+    case paragraph = "Paragraph"
+
+    var id: String { rawValue }
+}
+
+enum TypewriterScrollAnchor: String, CaseIterable, Identifiable {
+    case top = "Top"
+    case middle = "Middle"
+    case bottom = "Bottom"
+    case variable = "Variable"
+
+    var id: String { rawValue }
+}
+
 struct MarkdownTextEditor: NSViewRepresentable {
     @Binding var text: String
     let fontName: String
@@ -12,6 +36,11 @@ struct MarkdownTextEditor: NSViewRepresentable {
     let textInset: CGSize
     let topInset: CGFloat
     let bottomInset: CGFloat
+    let typewriterMode: TypewriterMode
+    let highlightScope: TypewriterHighlightScope
+    let fixedScrollEnabled: Bool
+    let fixedScrollAnchor: TypewriterScrollAnchor
+    let markCurrentLine: Bool
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -64,7 +93,12 @@ struct MarkdownTextEditor: NSViewRepresentable {
             textColor: textColor,
             backgroundColor: backgroundColor,
             lineSpacing: lineSpacing,
-            colorScheme: colorScheme
+            colorScheme: colorScheme,
+            typewriterMode: typewriterMode,
+            highlightScope: highlightScope,
+            markCurrentLine: markCurrentLine,
+            fixedScrollEnabled: fixedScrollEnabled,
+            fixedScrollAnchor: fixedScrollAnchor
         )
 
         textView.backgroundColor = backgroundColor
@@ -88,6 +122,11 @@ struct MarkdownTextEditor: NSViewRepresentable {
 class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
     private let highlighter = MarkdownHighlighter()
     private var config = MarkdownStyleConfig.defaultConfig()
+    private var fixedScrollEnabled = false
+    private var fixedScrollAnchor: TypewriterScrollAnchor = .middle
+    private var variableAnchorOffset: CGFloat?
+    weak var textView: NSTextView?
+    weak var scrollView: NSScrollView?
     var isUpdating = false
 
     func updateConfig(
@@ -96,7 +135,12 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
         textColor: NSColor,
         backgroundColor: NSColor,
         lineSpacing: CGFloat,
-        colorScheme: ColorScheme
+        colorScheme: ColorScheme,
+        typewriterMode: TypewriterMode,
+        highlightScope: TypewriterHighlightScope,
+        markCurrentLine: Bool,
+        fixedScrollEnabled: Bool,
+        fixedScrollAnchor: TypewriterScrollAnchor
     ) {
         config = MarkdownStyleConfig(
             fontName: fontName,
@@ -104,14 +148,24 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
             textColor: textColor,
             backgroundColor: backgroundColor,
             lineSpacing: lineSpacing,
-            colorScheme: colorScheme
+            colorScheme: colorScheme,
+            typewriterEnabled: typewriterMode == .typewriter,
+            highlightScope: highlightScope,
+            markCurrentLine: markCurrentLine
         )
+        self.fixedScrollEnabled = fixedScrollEnabled
+        self.fixedScrollAnchor = fixedScrollAnchor
+        if typewriterMode == .normal {
+            variableAnchorOffset = nil
+        }
     }
 
     func configure(textView: NSTextView) {
         textView.string = ""
         textView.insertionPointColor = config.textColor
         applyHighlighting(to: textView)
+        self.textView = textView
+        self.scrollView = textView.enclosingScrollView
     }
 
     func textDidChange(_ notification: Notification) {
@@ -119,14 +173,24 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
         guard !isUpdating else { return }
         isUpdating = true
         applyHighlighting(to: textView)
+        applyFixedScrolling(typing: true)
         isUpdating = false
     }
 
     func applyHighlighting(to textView: NSTextView) {
         guard let textStorage = textView.textStorage else { return }
         let selectedRanges = textView.selectedRanges
-        let activeRange = activeLineRange(for: textView)
-        highlighter.apply(to: textStorage, config: config, activeRange: activeRange)
+        let tokenActiveRange = activeLineRange(for: textView)
+        let computedHighlightRange = highlightRange(for: textView)
+        let highlightRange = config.typewriterEnabled ? (computedHighlightRange ?? tokenActiveRange) : nil
+        let markLineRange = config.typewriterEnabled && config.markCurrentLine ? tokenActiveRange : nil
+        highlighter.apply(
+            to: textStorage,
+            config: config,
+            tokenActiveRange: tokenActiveRange,
+            highlightRange: highlightRange,
+            markLineRange: markLineRange
+        )
         textView.insertionPointColor = config.textColor
         textView.typingAttributes = [
             .font: config.baseFont,
@@ -141,6 +205,7 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
         guard !isUpdating else { return }
         isUpdating = true
         applyHighlighting(to: textView)
+        applyFixedScrolling(typing: false)
         isUpdating = false
     }
 
@@ -156,6 +221,108 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
         let adjustedRange = NSRange(location: boundedLocation, length: selectionRange.length)
         return text.lineRange(for: adjustedRange)
     }
+
+    private func highlightRange(for textView: NSTextView) -> NSRange? {
+        guard config.typewriterEnabled else { return nil }
+        guard let selectionValue = textView.selectedRanges.first as? NSValue else { return nil }
+        let selectionRange = selectionValue.rangeValue
+        guard selectionRange.location != NSNotFound else { return nil }
+        let text = textView.string
+        if text.isEmpty {
+            return nil
+        }
+        let nsText = text as NSString
+        let boundedLocation = min(selectionRange.location, max(0, nsText.length - 1))
+        let searchRange = NSRange(location: boundedLocation, length: selectionRange.length)
+        switch config.highlightScope {
+        case .line:
+            return nsText.lineRange(for: searchRange)
+        case .paragraph:
+            return nsText.paragraphRange(for: searchRange)
+        case .sentence:
+            return sentenceRange(in: text, location: boundedLocation)
+        }
+    }
+
+    private func sentenceRange(in text: String, location: Int) -> NSRange? {
+        guard !text.isEmpty else { return nil }
+        var result: NSRange?
+        let fullRange = text.startIndex..<text.endIndex
+        text.enumerateSubstrings(in: fullRange, options: [.bySentences]) { _, range, _, stop in
+            let nsRange = NSRange(range, in: text)
+            if nsRange.location <= location && location <= nsRange.location + nsRange.length {
+                result = nsRange
+                stop = true
+            }
+        }
+        return result
+    }
+
+    private func applyFixedScrolling(typing: Bool) {
+        guard config.typewriterEnabled else {
+            variableAnchorOffset = nil
+            return
+        }
+        guard fixedScrollEnabled else {
+            variableAnchorOffset = nil
+            return
+        }
+        guard let textView = textView,
+              let scrollView = scrollView,
+              let caretRect = caretRect(in: textView) else {
+            return
+        }
+
+        let visibleRect = scrollView.contentView.bounds
+        let anchorOffset: CGFloat
+        switch fixedScrollAnchor {
+        case .variable:
+            guard typing else {
+                variableAnchorOffset = nil
+                return
+            }
+            if variableAnchorOffset == nil {
+                variableAnchorOffset = caretRect.midY - visibleRect.minY
+            }
+            anchorOffset = variableAnchorOffset ?? visibleRect.height * 0.5
+        case .top:
+            anchorOffset = visibleRect.height * 0.25
+        case .middle:
+            anchorOffset = visibleRect.height * 0.5
+        case .bottom:
+            anchorOffset = visibleRect.height * 0.75
+        }
+
+        let desiredOriginY = caretRect.midY - anchorOffset
+        let maxOriginY = max(0, textView.bounds.height - visibleRect.height)
+        let clampedOriginY = min(max(desiredOriginY, 0), maxOriginY)
+
+        if abs(visibleRect.minY - clampedOriginY) > 0.5 {
+            scrollView.contentView.scroll(to: NSPoint(x: visibleRect.minX, y: clampedOriginY))
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+        }
+    }
+
+    private func caretRect(in textView: NSTextView) -> NSRect? {
+        guard let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer else {
+            return nil
+        }
+        let length = textView.string.count
+        if length == 0 {
+            return nil
+        }
+        let selectedRange = textView.selectedRange()
+        let location = min(selectedRange.location, max(0, length - 1))
+        let glyphRange = layoutManager.glyphRange(
+            forCharacterRange: NSRange(location: location, length: 0),
+            actualCharacterRange: nil
+        )
+        var rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+        rect.origin.x += textView.textContainerInset.width
+        rect.origin.y += textView.textContainerInset.height
+        return rect
+    }
 }
 
 private struct MarkdownStyleConfig {
@@ -165,6 +332,9 @@ private struct MarkdownStyleConfig {
     let backgroundColor: NSColor
     let lineSpacing: CGFloat
     let colorScheme: ColorScheme
+    let typewriterEnabled: Bool
+    let highlightScope: TypewriterHighlightScope
+    let markCurrentLine: Bool
 
     var baseFont: NSFont {
         NSFont(name: fontName, size: fontSize) ?? .systemFont(ofSize: fontSize)
@@ -172,6 +342,10 @@ private struct MarkdownStyleConfig {
 
     var tokenColor: NSColor {
         textColor.withAlphaComponent(colorScheme == .dark ? 0.45 : 0.35)
+    }
+
+    var fadedTextColor: NSColor {
+        textColor.withAlphaComponent(colorScheme == .dark ? 0.35 : 0.4)
     }
 
     var hiddenTokenColor: NSColor {
@@ -223,6 +397,12 @@ private struct MarkdownStyleConfig {
         colorScheme == .dark ? NSColor.systemTeal : NSColor.systemBlue
     }
 
+    var currentLineBackground: NSColor {
+        colorScheme == .dark
+            ? NSColor.white.withAlphaComponent(0.06)
+            : NSColor.black.withAlphaComponent(0.04)
+    }
+
     var paragraphStyle: NSMutableParagraphStyle {
         let style = NSMutableParagraphStyle()
         style.lineSpacing = lineSpacing
@@ -236,7 +416,10 @@ private struct MarkdownStyleConfig {
             textColor: NSColor.labelColor,
             backgroundColor: NSColor.textBackgroundColor,
             lineSpacing: 4,
-            colorScheme: .light
+            colorScheme: .light,
+            typewriterEnabled: false,
+            highlightScope: .line,
+            markCurrentLine: false
         )
     }
 }
@@ -287,24 +470,57 @@ private final class MarkdownHighlighter {
         options: [.anchorsMatchLines]
     )
 
-    func apply(to textStorage: NSTextStorage, config: MarkdownStyleConfig, activeRange: NSRange?) {
+    func apply(
+        to textStorage: NSTextStorage,
+        config: MarkdownStyleConfig,
+        tokenActiveRange: NSRange?,
+        highlightRange: NSRange?,
+        markLineRange: NSRange?
+    ) {
         let fullRange = NSRange(location: 0, length: textStorage.length)
-        let baseAttributes: [NSAttributedString.Key: Any] = [
-            .font: config.baseFont,
-            .foregroundColor: config.textColor,
-            .paragraphStyle: config.paragraphStyle
-        ]
-        textStorage.setAttributes(baseAttributes, range: fullRange)
+        if config.typewriterEnabled, let highlightRange {
+            let fadedAttributes: [NSAttributedString.Key: Any] = [
+                .font: config.baseFont,
+                .foregroundColor: config.fadedTextColor,
+                .paragraphStyle: config.paragraphStyle
+            ]
+            textStorage.setAttributes(fadedAttributes, range: fullRange)
+            let highlightAttributes: [NSAttributedString.Key: Any] = [
+                .font: config.baseFont,
+                .foregroundColor: config.textColor,
+                .paragraphStyle: config.paragraphStyle
+            ]
+            textStorage.addAttributes(highlightAttributes, range: highlightRange)
+        } else {
+            let baseAttributes: [NSAttributedString.Key: Any] = [
+                .font: config.baseFont,
+                .foregroundColor: config.textColor,
+                .paragraphStyle: config.paragraphStyle
+            ]
+            textStorage.setAttributes(baseAttributes, range: fullRange)
+        }
+
+        if let markLineRange, config.typewriterEnabled {
+            textStorage.addAttributes(
+                [.backgroundColor: config.currentLineBackground],
+                range: markLineRange
+            )
+        }
 
         let text = textStorage.string as NSString
 
-        applyHeadings(text, textStorage: textStorage, config: config, activeRange: activeRange)
+        applyHeadings(
+            text,
+            textStorage: textStorage,
+            config: config,
+            tokenActiveRange: tokenActiveRange
+        )
         applyInlinePattern(
             boldRegex,
             text: text,
             textStorage: textStorage,
             config: config,
-            activeRange: activeRange,
+            tokenActiveRange: tokenActiveRange,
             contentAttributes: [.font: withTraits(config.baseFont, traits: .boldFontMask)]
         )
         applyInlinePattern(
@@ -312,7 +528,7 @@ private final class MarkdownHighlighter {
             text: text,
             textStorage: textStorage,
             config: config,
-            activeRange: activeRange,
+            tokenActiveRange: tokenActiveRange,
             contentAttributes: [.font: withTraits(config.baseFont, traits: .italicFontMask)]
         )
         applyInlinePattern(
@@ -320,7 +536,7 @@ private final class MarkdownHighlighter {
             text: text,
             textStorage: textStorage,
             config: config,
-            activeRange: activeRange,
+            tokenActiveRange: tokenActiveRange,
             contentAttributes: [
                 .backgroundColor: config.markBackground
             ]
@@ -330,7 +546,7 @@ private final class MarkdownHighlighter {
             text: text,
             textStorage: textStorage,
             config: config,
-            activeRange: activeRange,
+            tokenActiveRange: tokenActiveRange,
             contentAttributes: [
                 .foregroundColor: config.deletionColor,
                 .strikethroughStyle: NSUnderlineStyle.single.rawValue
@@ -341,7 +557,7 @@ private final class MarkdownHighlighter {
             text: text,
             textStorage: textStorage,
             config: config,
-            activeRange: activeRange,
+            tokenActiveRange: tokenActiveRange,
             contentAttributes: [
                 .foregroundColor: config.mutedTextColor,
                 .backgroundColor: config.commentBackground,
@@ -353,7 +569,7 @@ private final class MarkdownHighlighter {
             text: text,
             textStorage: textStorage,
             config: config,
-            activeRange: activeRange,
+            tokenActiveRange: tokenActiveRange,
             contentAttributes: [
                 .backgroundColor: config.annotationBackground
             ]
@@ -363,7 +579,7 @@ private final class MarkdownHighlighter {
             text: text,
             textStorage: textStorage,
             config: config,
-            activeRange: activeRange,
+            tokenActiveRange: tokenActiveRange,
             contentAttributes: [
                 .foregroundColor: config.linkColor,
                 .underlineStyle: NSUnderlineStyle.single.rawValue
@@ -374,7 +590,7 @@ private final class MarkdownHighlighter {
             text: text,
             textStorage: textStorage,
             config: config,
-            activeRange: activeRange,
+            tokenActiveRange: tokenActiveRange,
             contentAttributes: [
                 .font: NSFont.monospacedSystemFont(ofSize: config.fontSize * 0.95, weight: .regular),
                 .foregroundColor: config.codeColor,
@@ -386,7 +602,7 @@ private final class MarkdownHighlighter {
             text: text,
             textStorage: textStorage,
             config: config,
-            activeRange: activeRange,
+            tokenActiveRange: tokenActiveRange,
             contentAttributes: [
                 .font: NSFont.monospacedSystemFont(ofSize: config.fontSize * 0.95, weight: .regular),
                 .foregroundColor: config.codeColor,
@@ -398,7 +614,7 @@ private final class MarkdownHighlighter {
             text: text,
             textStorage: textStorage,
             config: config,
-            activeRange: activeRange,
+            tokenActiveRange: tokenActiveRange,
             contentAttributes: [
                 .font: NSFont.monospacedSystemFont(ofSize: config.fontSize * 0.95, weight: .regular),
                 .foregroundColor: config.codeColor,
@@ -411,7 +627,7 @@ private final class MarkdownHighlighter {
             text: text,
             textStorage: textStorage,
             config: config,
-            activeRange: activeRange,
+            tokenActiveRange: tokenActiveRange,
             lineAttributes: [
                 .foregroundColor: config.mutedTextColor,
                 .backgroundColor: config.commentBackground,
@@ -425,7 +641,7 @@ private final class MarkdownHighlighter {
             text: text,
             textStorage: textStorage,
             config: config,
-            activeRange: activeRange,
+            tokenActiveRange: tokenActiveRange,
             lineAttributes: [
                 .foregroundColor: config.quoteColor,
                 .font: withTraits(config.baseFont, traits: .italicFontMask)
@@ -439,7 +655,7 @@ private final class MarkdownHighlighter {
             text: text,
             textStorage: textStorage,
             config: config,
-            activeRange: activeRange,
+            tokenActiveRange: tokenActiveRange,
             lineAttributes: [
                 .font: NSFont.monospacedSystemFont(ofSize: config.fontSize * 0.95, weight: .regular),
                 .foregroundColor: config.codeColor,
@@ -453,7 +669,7 @@ private final class MarkdownHighlighter {
             text: text,
             textStorage: textStorage,
             config: config,
-            activeRange: activeRange,
+            tokenActiveRange: tokenActiveRange,
             lineAttributes: [
                 .font: NSFont.monospacedSystemFont(ofSize: config.fontSize * 0.95, weight: .regular),
                 .foregroundColor: config.codeColor,
@@ -467,7 +683,7 @@ private final class MarkdownHighlighter {
             text: text,
             textStorage: textStorage,
             config: config,
-            activeRange: activeRange,
+            tokenActiveRange: tokenActiveRange,
             contentAttributes: [
                 .foregroundColor: config.linkColor,
                 .font: withTraits(config.baseFont, traits: .boldFontMask)
@@ -479,7 +695,7 @@ private final class MarkdownHighlighter {
             text: text,
             textStorage: textStorage,
             config: config,
-            activeRange: activeRange,
+            tokenActiveRange: tokenActiveRange,
             contentAttributes: [
                 .foregroundColor: config.linkColor,
                 .font: withTraits(config.baseFont, traits: .boldFontMask)
@@ -491,7 +707,7 @@ private final class MarkdownHighlighter {
             text: text,
             textStorage: textStorage,
             config: config,
-            activeRange: activeRange
+            tokenActiveRange: tokenActiveRange
         )
     }
 
@@ -499,11 +715,11 @@ private final class MarkdownHighlighter {
         _ text: NSString,
         textStorage: NSTextStorage,
         config: MarkdownStyleConfig,
-        activeRange: NSRange?
+        tokenActiveRange: NSRange?
     ) {
         headingRegex.matches(in: text as String, range: NSRange(location: 0, length: text.length)).forEach { match in
-        let prefixRange = match.range(at: 1)
-        let contentRange = match.range(at: 2)
+            let prefixRange = match.range(at: 1)
+            let contentRange = match.range(at: 2)
         let prefixText = text.substring(with: prefixRange)
         let hashCount = prefixText.filter { $0 == "#" }.count
         let level = min(max(hashCount, 1), 4)
@@ -534,8 +750,8 @@ private final class MarkdownHighlighter {
             )
             textStorage.addAttributes(
                 [
-                    .foregroundColor: tokenColor(config: config, activeRange: activeRange, tokenRange: prefixRange),
-                    .font: tokenFont(config: config, activeRange: activeRange, tokenRange: prefixRange)
+                    .foregroundColor: tokenColor(config: config, activeRange: tokenActiveRange, tokenRange: prefixRange),
+                    .font: tokenFont(config: config, activeRange: tokenActiveRange, tokenRange: prefixRange)
                 ],
                 range: prefixRange
             )
@@ -547,7 +763,7 @@ private final class MarkdownHighlighter {
         text: NSString,
         textStorage: NSTextStorage,
         config: MarkdownStyleConfig,
-        activeRange: NSRange?,
+        tokenActiveRange: NSRange?,
         contentAttributes: [NSAttributedString.Key: Any]
     ) {
         regex.matches(in: text as String, range: NSRange(location: 0, length: text.length)).forEach { match in
@@ -564,12 +780,12 @@ private final class MarkdownHighlighter {
                     [
                         .foregroundColor: tokenColor(
                             config: config,
-                            activeRange: activeRange,
+                            activeRange: tokenActiveRange,
                             tokenRange: NSRange(location: fullRange.location, length: leadingTokenLength)
                         ),
                         .font: tokenFont(
                             config: config,
-                            activeRange: activeRange,
+                            activeRange: tokenActiveRange,
                             tokenRange: NSRange(location: fullRange.location, length: leadingTokenLength)
                         )
                     ],
@@ -581,7 +797,7 @@ private final class MarkdownHighlighter {
                     [
                         .foregroundColor: tokenColor(
                             config: config,
-                            activeRange: activeRange,
+                            activeRange: tokenActiveRange,
                             tokenRange: NSRange(
                                 location: fullRange.location + fullRange.length - trailingTokenLength,
                                 length: trailingTokenLength
@@ -589,7 +805,7 @@ private final class MarkdownHighlighter {
                         ),
                         .font: tokenFont(
                             config: config,
-                            activeRange: activeRange,
+                            activeRange: tokenActiveRange,
                             tokenRange: NSRange(
                                 location: fullRange.location + fullRange.length - trailingTokenLength,
                                 length: trailingTokenLength
@@ -610,7 +826,7 @@ private final class MarkdownHighlighter {
         text: NSString,
         textStorage: NSTextStorage,
         config: MarkdownStyleConfig,
-        activeRange: NSRange?,
+        tokenActiveRange: NSRange?,
         lineAttributes: [NSAttributedString.Key: Any],
         tokenLength: Int,
         indent: CGFloat = 0
@@ -618,13 +834,13 @@ private final class MarkdownHighlighter {
         regex.matches(in: text as String, range: NSRange(location: 0, length: text.length)).forEach { match in
             let fullRange = match.range(at: 0)
             let prefixRange = match.numberOfRanges > 1 ? match.range(at: 1) : NSRange(location: fullRange.location, length: tokenLength)
-            let isActiveLine = activeRange.map { NSIntersectionRange(fullRange, $0).length > 0 } ?? false
+            let isActiveLine = tokenActiveRange.map { NSIntersectionRange(fullRange, $0).length > 0 } ?? false
             textStorage.addAttributes(lineAttributes, range: fullRange)
             if tokenLength > 0, fullRange.length >= tokenLength {
                 textStorage.addAttributes(
                     [
-                        .foregroundColor: tokenColor(config: config, activeRange: activeRange, tokenRange: prefixRange),
-                        .font: tokenFont(config: config, activeRange: activeRange, tokenRange: prefixRange)
+                        .foregroundColor: tokenColor(config: config, activeRange: tokenActiveRange, tokenRange: prefixRange),
+                        .font: tokenFont(config: config, activeRange: tokenActiveRange, tokenRange: prefixRange)
                     ],
                     range: prefixRange
                 )
@@ -644,13 +860,13 @@ private final class MarkdownHighlighter {
         text: NSString,
         textStorage: NSTextStorage,
         config: MarkdownStyleConfig,
-        activeRange: NSRange?
+        tokenActiveRange: NSRange?
     ) {
         regex.matches(in: text as String, range: NSRange(location: 0, length: text.length)).forEach { match in
             textStorage.addAttributes(
                 [
-                    .foregroundColor: tokenColor(config: config, activeRange: activeRange, tokenRange: match.range),
-                    .font: tokenFont(config: config, activeRange: activeRange, tokenRange: match.range)
+                    .foregroundColor: tokenColor(config: config, activeRange: tokenActiveRange, tokenRange: match.range),
+                    .font: tokenFont(config: config, activeRange: tokenActiveRange, tokenRange: match.range)
                 ],
                 range: match.range
             )
@@ -701,7 +917,12 @@ extension MarkdownTextEditor {
                 textColor: parent.textColor,
                 backgroundColor: parent.backgroundColor,
                 lineSpacing: parent.lineSpacing,
-                colorScheme: parent.colorScheme
+                colorScheme: parent.colorScheme,
+                typewriterMode: parent.typewriterMode,
+                highlightScope: parent.highlightScope,
+                markCurrentLine: parent.markCurrentLine,
+                fixedScrollEnabled: parent.fixedScrollEnabled,
+                fixedScrollAnchor: parent.fixedScrollAnchor
             )
         }
 

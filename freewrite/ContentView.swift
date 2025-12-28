@@ -49,7 +49,6 @@ struct ContentView: View {
     
     @State private var isFullscreen = false
     @State private var selectedFont: String = "Lato-Regular"
-    @State private var currentRandomFont: String = ""
     @State private var timeRemaining: Int = 900  // Changed to 900 seconds (15 minutes)
     @State private var timerIsRunning = false
     @State private var isHoveringTimer = false
@@ -84,11 +83,15 @@ struct ContentView: View {
     @State private var colorScheme: ColorScheme = .light // Add state for color scheme
     @State private var isHoveringThemeToggle = false // Add state for theme toggle hover
     @State private var didCopyPrompt: Bool = false // Add state for copy prompt feedback
+    @State private var typewriterMode: TypewriterMode = .normal
+    @State private var typewriterHighlight: TypewriterHighlightScope = .line
+    @State private var typewriterFixedScroll: Bool = true
+    @State private var typewriterScrollAnchor: TypewriterScrollAnchor = .middle
+    @State private var typewriterMarkLine: Bool = true
+    @State private var isHoveringTypewriter = false
     let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     let entryHeight: CGFloat = 40
     
-    let availableFonts = NSFontManager.shared.availableFontFamilies
-    let standardFonts = ["Lato-Regular", "Arial", ".AppleSystemUIFont", "Times New Roman"]
     let fontSizes: [CGFloat] = [16, 18, 20, 22, 24, 26]
     let placeholderOptions = [
         "Begin writing",
@@ -336,10 +339,6 @@ struct ContentView: View {
         }
     }
     
-    var randomButtonTitle: String {
-        return currentRandomFont.isEmpty ? "Random" : "Random [\(currentRandomFont)]"
-    }
-    
     var timerButtonTitle: String {
         if !timerIsRunning && timeRemaining == 900 {
             return "15:00"
@@ -413,7 +412,12 @@ struct ContentView: View {
                         colorScheme: colorScheme,
                         textInset: editorTextInset,
                         topInset: editorTopInset,
-                        bottomInset: editorBottomInset
+                        bottomInset: editorBottomInset,
+                        typewriterMode: typewriterMode,
+                        highlightScope: typewriterHighlight,
+                        fixedScrollEnabled: typewriterFixedScroll,
+                        fixedScrollAnchor: typewriterScrollAnchor,
+                        markCurrentLine: typewriterMarkLine
                     )
                     .background(Color(colorScheme == .light ? .white : .black))
                     .frame(maxWidth: 650)
@@ -475,7 +479,6 @@ struct ContentView: View {
                             
                             Button("Lato") {
                                 selectedFont = "Lato-Regular"
-                                currentRandomFont = ""
                             }
                             .buttonStyle(.plain)
                             .foregroundColor(hoveredFont == "Lato" ? textHoverColor : textColor)
@@ -494,7 +497,6 @@ struct ContentView: View {
                             
                             Button("Arial") {
                                 selectedFont = "Arial"
-                                currentRandomFont = ""
                             }
                             .buttonStyle(.plain)
                             .foregroundColor(hoveredFont == "Arial" ? textHoverColor : textColor)
@@ -513,7 +515,6 @@ struct ContentView: View {
                             
                             Button("System") {
                                 selectedFont = ".AppleSystemUIFont"
-                                currentRandomFont = ""
                             }
                             .buttonStyle(.plain)
                             .foregroundColor(hoveredFont == "System" ? textHoverColor : textColor)
@@ -532,7 +533,6 @@ struct ContentView: View {
                             
                             Button("Serif") {
                                 selectedFont = "Times New Roman"
-                                currentRandomFont = ""
                             }
                             .buttonStyle(.plain)
                             .foregroundColor(hoveredFont == "Serif" ? textHoverColor : textColor)
@@ -548,17 +548,38 @@ struct ContentView: View {
                             
                             Text("•")
                                 .foregroundColor(.gray)
-                            
-                            Button(randomButtonTitle) {
-                                if let randomFont = availableFonts.randomElement() {
-                                    selectedFont = randomFont
-                                    currentRandomFont = randomFont
+
+                            Menu {
+                                Picker("Mode", selection: $typewriterMode) {
+                                    ForEach(TypewriterMode.allCases) { mode in
+                                        Text(mode.rawValue).tag(mode)
+                                    }
                                 }
+                                Divider()
+                                Picker("Highlight", selection: $typewriterHighlight) {
+                                    ForEach(TypewriterHighlightScope.allCases) { option in
+                                        Text(option.rawValue).tag(option)
+                                    }
+                                }
+                                .disabled(typewriterMode == .normal)
+                                Toggle("Fixed Scrolling", isOn: $typewriterFixedScroll)
+                                    .disabled(typewriterMode == .normal)
+                                Picker("Position", selection: $typewriterScrollAnchor) {
+                                    ForEach(TypewriterScrollAnchor.allCases) { option in
+                                        Text(option.rawValue).tag(option)
+                                    }
+                                }
+                                .disabled(typewriterMode == .normal || !typewriterFixedScroll)
+                                Toggle("Mark Current Line", isOn: $typewriterMarkLine)
+                                    .disabled(typewriterMode == .normal)
+                            } label: {
+                                Text(typewriterMode.rawValue)
                             }
+                            .menuStyle(BorderlessButtonMenuStyle())
                             .buttonStyle(.plain)
-                            .foregroundColor(hoveredFont == "Random" ? textHoverColor : textColor)
+                            .foregroundColor(isHoveringTypewriter ? textHoverColor : textColor)
                             .onHover { hovering in
-                                hoveredFont = hovering ? "Random" : nil
+                                isHoveringTypewriter = hovering
                                 isHoveringBottomNav = hovering
                                 if hovering {
                                     NSCursor.pointingHand.push()
