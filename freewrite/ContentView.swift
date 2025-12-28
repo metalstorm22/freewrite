@@ -53,7 +53,7 @@ struct ContentView: View {
     @State private var timerIsRunning = false
     @State private var isHoveringTimer = false
     @State private var isHoveringFullscreen = false
-    @State private var hoveredFont: String? = nil
+    @State private var isHoveringFont = false
     @State private var isHoveringSize = false
     @State private var fontSize: CGFloat = 18
     @State private var blinkCount = 0
@@ -90,6 +90,12 @@ struct ContentView: View {
     let entryHeight: CGFloat = 40
     
     let fontSizes: [CGFloat] = [16, 18, 20, 22, 24, 26]
+    let fontOptions: [(label: String, value: String)] = [
+        ("Lato", "Lato-Regular"),
+        ("Arial", "Arial"),
+        ("System", ".AppleSystemUIFont"),
+        ("Serif", "Times New Roman")
+    ]
     let placeholderOptions = [
         "Begin writing",
         "Pick a thought and go",
@@ -363,6 +369,10 @@ struct ContentView: View {
         return "\(Int(fontSize))px"
     }
     
+    var currentFontLabel: String {
+        fontOptions.first(where: { $0.value == selectedFont })?.label ?? "Font"
+    }
+    
     // Add a color utility computed property
     var popoverBackgroundColor: Color {
         return colorScheme == .light ? Color(NSColor.controlBackgroundColor) : Color(NSColor.darkGray)
@@ -475,71 +485,16 @@ struct ContentView: View {
                                     NSCursor.pop()
                                 }
                             }
-                            
                             Text("•")
                                 .foregroundColor(.gray)
                             
-                            Button("Lato") {
-                                selectedFont = "Lato-Regular"
+                            Button(currentFontLabel) {
+                                cycleFont()
                             }
                             .buttonStyle(.plain)
-                            .foregroundColor(hoveredFont == "Lato" ? textHoverColor : textColor)
+                            .foregroundColor(isHoveringFont ? textHoverColor : textColor)
                             .onHover { hovering in
-                                hoveredFont = hovering ? "Lato" : nil
-                                isHoveringBottomNav = hovering
-                                if hovering {
-                                    NSCursor.pointingHand.push()
-                                } else {
-                                    NSCursor.pop()
-                                }
-                            }
-                            
-                            Text("•")
-                                .foregroundColor(.gray)
-                            
-                            Button("Arial") {
-                                selectedFont = "Arial"
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundColor(hoveredFont == "Arial" ? textHoverColor : textColor)
-                            .onHover { hovering in
-                                hoveredFont = hovering ? "Arial" : nil
-                                isHoveringBottomNav = hovering
-                                if hovering {
-                                    NSCursor.pointingHand.push()
-                                } else {
-                                    NSCursor.pop()
-                                }
-                            }
-                            
-                            Text("•")
-                                .foregroundColor(.gray)
-                            
-                            Button("System") {
-                                selectedFont = ".AppleSystemUIFont"
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundColor(hoveredFont == "System" ? textHoverColor : textColor)
-                            .onHover { hovering in
-                                hoveredFont = hovering ? "System" : nil
-                                isHoveringBottomNav = hovering
-                                if hovering {
-                                    NSCursor.pointingHand.push()
-                                } else {
-                                    NSCursor.pop()
-                                }
-                            }
-                            
-                            Text("•")
-                                .foregroundColor(.gray)
-                            
-                            Button("Serif") {
-                                selectedFont = "Times New Roman"
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundColor(hoveredFont == "Serif" ? textHoverColor : textColor)
-                            .onHover { hovering in
-                                hoveredFont = hovering ? "Serif" : nil
+                                isHoveringFont = hovering
                                 isHoveringBottomNav = hovering
                                 if hovering {
                                     NSCursor.pointingHand.push()
@@ -1079,6 +1034,15 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.willExitFullScreenNotification)) { _ in
             isFullscreen = false
         }
+    }
+    
+    private func cycleFont() {
+        guard let currentIndex = fontOptions.firstIndex(where: { $0.value == selectedFont }) else {
+            selectedFont = fontOptions.first?.value ?? selectedFont
+            return
+        }
+        let nextIndex = (currentIndex + 1) % fontOptions.count
+        selectedFont = fontOptions[nextIndex].value
     }
     
     private func backgroundColor(for entry: HumanEntry) -> Color {
