@@ -1169,7 +1169,7 @@ struct ContentView: View {
         let fullText = aiChatPrompt + "\n\n" + trimmedText
         
         if let encodedText = fullText.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-           let url = URL(string: "https://chat.openai.com/?m=" + encodedText) {
+           let url = URL(string: "https://chatgpt.com/?prompt=" + encodedText) {
             NSWorkspace.shared.open(url)
         }
     }
