@@ -814,8 +814,8 @@ struct ContentView: View {
                             Button(action: {
                                 createNewEntry()
                             }) {
-                                Text("New Entry")
-                                    .font(.system(size: 13))
+                                Image(systemName: "plus")
+                                    .font(.system(size: 13, weight: .semibold))
                             }
                             .buttonStyle(.plain)
                             .foregroundColor(isHoveringNewEntry ? textHoverColor : textColor)
