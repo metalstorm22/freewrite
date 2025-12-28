@@ -432,7 +432,8 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
         let paddedContentHeight = textView.bounds.height + halfLinePadding
         let maxOriginY = max(0, paddedContentHeight - visibleRect.height)
         let clampedOriginY = min(max(desiredOriginY, 0), maxOriginY)
-        let targetPoint = NSPoint(x: 0, y: clampedOriginY)
+        let currentOriginX = scrollView.contentView.bounds.origin.x
+        let targetPoint = NSPoint(x: currentOriginX, y: clampedOriginY)
 
         if abs(visibleRect.minY - clampedOriginY) > 0.5 || abs(visibleRect.minX - targetPoint.x) > 0.5 {
             scrollView.contentView.scroll(to: targetPoint)
