@@ -85,8 +85,6 @@ struct ContentView: View {
     @State private var didCopyPrompt: Bool = false // Add state for copy prompt feedback
     @State private var typewriterMode: TypewriterMode = .normal
     @State private var typewriterHighlight: TypewriterHighlightScope = .line
-    @State private var typewriterFixedScroll: Bool = true
-    @State private var typewriterMarkLine: Bool = true
     @State private var isHoveringTypewriter = false
     let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     let entryHeight: CGFloat = 40
@@ -391,7 +389,7 @@ struct ContentView: View {
         let baseFont = NSFont(name: selectedFont, size: fontSize) ?? .systemFont(ofSize: fontSize)
         let baseLineHeight = getLineHeight(font: baseFont)
         let activeLineHeight = baseLineHeight + lineHeight
-        let typewriterExtraInset: CGFloat = (typewriterMode == .typewriter && typewriterFixedScroll)
+        let typewriterExtraInset: CGFloat = typewriterMode == .typewriter
             ? max(0, (viewHeight - activeLineHeight) / 2)
             : 0
         
@@ -420,8 +418,8 @@ struct ContentView: View {
                         bottomInset: editorBottomInset,
                         typewriterMode: typewriterMode,
                         highlightScope: typewriterHighlight,
-                        fixedScrollEnabled: typewriterFixedScroll,
-                        markCurrentLine: typewriterMarkLine
+                        fixedScrollEnabled: typewriterMode == .typewriter,
+                        markCurrentLine: false
                     )
                     .background(Color(colorScheme == .light ? .white : .black))
                     .frame(maxWidth: 650)
@@ -566,10 +564,6 @@ struct ContentView: View {
                                     }
                                 }
                                 .disabled(typewriterMode == .normal)
-                                Toggle("Fixed Scrolling", isOn: $typewriterFixedScroll)
-                                    .disabled(typewriterMode == .normal)
-                                Toggle("Mark Current Line", isOn: $typewriterMarkLine)
-                                    .disabled(typewriterMode == .normal)
                             } label: {
                                 Text(typewriterMode.rawValue)
                             }
