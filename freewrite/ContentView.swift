@@ -86,15 +86,6 @@ struct ContentView: View {
     @State private var typewriterMode: TypewriterMode = .normal
     @State private var typewriterHighlight: TypewriterHighlightScope = .line
     @State private var isHoveringTypewriter = false
-    private let styleAnalyzer = StyleAnalyzer()
-    @State private var styleIssues: [StyleIssue] = []
-    @State private var ignoredIssueKeys: Set<String> = []
-    @State private var analysisVersion: Int = 0
-    @State private var pendingAnalysisWorkItem: DispatchWorkItem?
-    @State private var isAnalyzingStyle = false
-    @State private var showingStylePopover = false
-    @State private var isHoveringStyle = false
-    @State private var stylePopoverHeight: CGFloat = 620
     let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     let entryHeight: CGFloat = 40
     
@@ -800,49 +791,6 @@ struct ContentView: View {
                             Text("•")
                                 .foregroundColor(.gray)
                             
-                            Button(action: {
-                                showingStylePopover = true
-                                scheduleStyleAnalysis(force: true)
-                            }) {
-                                HStack(spacing: 6) {
-                                    Text("Style")
-                                    if isAnalyzingStyle {
-                                        ProgressView()
-                                            .controlSize(.mini)
-                                            .scaleEffect(0.7)
-                                    } else if !styleIssues.isEmpty {
-                                        Text("\(styleIssues.count)")
-                                            .font(.system(size: 11, weight: .semibold))
-                                            .padding(.horizontal, 6)
-                                            .padding(.vertical, 2)
-                                            .background(
-                                                Capsule()
-                                                    .fill(colorScheme == .light ? Color.gray.opacity(0.2) : Color.gray.opacity(0.4))
-                                            )
-                                    }
-                                }
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundColor(isHoveringStyle ? textHoverColor : textColor)
-                            .onHover { hovering in
-                                isHoveringStyle = hovering
-                                isHoveringBottomNav = hovering
-                                if hovering {
-                                    NSCursor.pointingHand.push()
-                                } else {
-                                    NSCursor.pop()
-                                }
-                            }
-                            .popover(isPresented: $showingStylePopover, attachmentAnchor: .point(UnitPoint(x: 0.5, y: 0)), arrowEdge: .top) {
-                                stylePopoverView()
-                                    .background(popoverBackgroundColor)
-                                    .cornerRadius(8)
-                                    .shadow(color: Color.black.opacity(0.1), radius: 4, y: 2)
-                            }
-                            
-                            Text("•")
-                                .foregroundColor(.gray)
-                            
                             Button(isFullscreen ? "Minimize" : "Fullscreen") {
                                 if let window = NSApplication.shared.windows.first {
                                     window.toggleFullScreen(nil)
@@ -1112,9 +1060,6 @@ struct ContentView: View {
                let currentEntry = entries.first(where: { $0.id == currentId }) {
                 saveEntry(entry: currentEntry)
             }
-            if showingStylePopover {
-                scheduleStyleAnalysis()
-            }
         }
         .onReceive(timer) { _ in
             if timerIsRunning && timeRemaining > 0 {
@@ -1134,175 +1079,6 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.willExitFullScreenNotification)) { _ in
             isFullscreen = false
         }
-    }
-    
-    @ViewBuilder
-    private func stylePopoverView() -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Style layer")
-                        .font(.system(size: 13, weight: .semibold))
-                    Text("\(styleIssues.count) issues")
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                }
-                Spacer()
-                if isAnalyzingStyle {
-                    ProgressView()
-                        .controlSize(.small)
-                }
-            }
-            
-            if styleIssues.isEmpty {
-                Text(isAnalyzingStyle ? "Analyzing..." : "Nothing to fix right now.")
-                    .font(.system(size: 13))
-                    .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 4)
-            } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 8) {
-                        ForEach(styleIssues) { issue in
-                            VStack(alignment: .leading, spacing: 6) {
-                                HStack {
-                                    Text(issue.category.rawValue)
-                                        .font(.system(size: 11, weight: .semibold))
-                                        .foregroundColor(.secondary)
-                                    Spacer()
-                                    Text(issue.severity == .warning ? "Warning" : "Info")
-                                        .font(.system(size: 11))
-                                        .foregroundColor(issue.severity == .warning ? .red : .secondary)
-                                }
-                                Text(issue.message)
-                                    .font(.system(size: 13))
-                                    .foregroundColor(.primary)
-                                
-                                HStack(spacing: 10) {
-                                    Button("Select") {
-                                        reveal(issue: issue)
-                                    }
-                                    .buttonStyle(.plain)
-                                    
-                                    if issue.fix != nil {
-                                        Button("Apply") {
-                                            applyFix(for: issue)
-                                        }
-                                        .buttonStyle(.plain)
-                                    }
-                                    
-                                    Button("Ignore") {
-                                        ignoreIssue(issue)
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                                .font(.system(size: 12))
-                            }
-                            .padding(10)
-                            .background(colorScheme == .light ? Color.white : Color(NSColor.darkGray))
-                            .cornerRadius(8)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 8)
-                                    .stroke(Color.gray.opacity(0.15))
-                            )
-                        }
-                    }
-                    .padding(.vertical, 2)
-                }
-            }
-        }
-        .frame(width: 360, height: stylePopoverHeight)
-        .padding(12)
-        .overlay(resizeHandle, alignment: .bottom)
-    }
-    
-    private var resizeHandle: some View {
-        Rectangle()
-            .fill(Color.clear)
-            .frame(height: 18)
-            .overlay(
-                Capsule()
-                    .fill(Color.gray.opacity(0.25))
-                    .frame(width: 46, height: 6)
-                    .padding(.top, 8)
-            )
-            .gesture(
-                DragGesture()
-                    .onChanged { value in
-                        stylePopoverHeight = max(360, min(900, stylePopoverHeight + value.translation.height))
-                    }
-            )
-    }
-    
-    private func scheduleStyleAnalysis(force: Bool = false) {
-        pendingAnalysisWorkItem?.cancel()
-        
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            styleIssues = []
-            isAnalyzingStyle = false
-            return
-        }
-        
-        if force {
-            styleIssues = []
-        }
-        
-        analysisVersion += 1
-        let version = analysisVersion
-        let currentText = text
-        isAnalyzingStyle = true
-        
-        let workItem = DispatchWorkItem { [currentText] in
-            let issues = styleAnalyzer.analyze(text: currentText)
-            DispatchQueue.main.async {
-                guard version == analysisVersion else { return }
-                isAnalyzingStyle = false
-                let filtered = issues.filter { issue in
-                    guard let key = issue.ignoredKey else { return true }
-                    return !ignoredIssueKeys.contains(key)
-                }
-                styleIssues = filtered.sorted { lhs, rhs in
-                    if lhs.category != rhs.category {
-                        return lhs.category.rawValue < rhs.category.rawValue
-                    }
-                    if lhs.severity != rhs.severity {
-                        return lhs.severity == .warning
-                    }
-                    return lhs.range.location < rhs.range.location
-                }
-            }
-        }
-        pendingAnalysisWorkItem = workItem
-        let delay: DispatchTime = .now() + (force ? .milliseconds(0) : .milliseconds(350))
-        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: delay, execute: workItem)
-    }
-    
-    private func applyFix(for issue: StyleIssue) {
-        guard let fix = issue.fix else { return }
-        let nsText = text as NSString
-        guard fix.range.location + fix.range.length <= nsText.length else { return }
-        guard let range = Range(fix.range, in: text) else { return }
-        let replacement = fix.replacement ?? ""
-        text.replaceSubrange(range, with: replacement)
-        styleIssues.removeAll { $0.id == issue.id }
-    }
-    
-    private func ignoreIssue(_ issue: StyleIssue) {
-        if let key = issue.ignoredKey {
-            ignoredIssueKeys.insert(key)
-        }
-        styleIssues.removeAll { $0.id == issue.id }
-    }
-    
-    private func reveal(issue: StyleIssue) {
-        guard let window = NSApplication.shared.windows.first,
-              let textView = window.contentView?.findTextView() as? NSTextView else {
-            return
-        }
-        textView.setSelectedRange(issue.range)
-        textView.scrollRangeToVisible(issue.range)
-        textView.showFindIndicator(for: issue.range)
     }
     
     private func backgroundColor(for entry: HumanEntry) -> Color {
@@ -1351,8 +1127,6 @@ struct ContentView: View {
     private func loadEntry(entry: HumanEntry) {
         let documentsDirectory = getDocumentsDirectory()
         let fileURL = documentsDirectory.appendingPathComponent(entry.filename)
-        ignoredIssueKeys = []
-        styleIssues = []
         
         do {
             if fileManager.fileExists(atPath: fileURL.path) {
@@ -1368,8 +1142,6 @@ struct ContentView: View {
         let newEntry = HumanEntry.createNew()
         entries.insert(newEntry, at: 0) // Add to the beginning
         selectedEntryId = newEntry.id
-        ignoredIssueKeys = []
-        styleIssues = []
         
         // If this is the first entry (entries was empty before adding this one)
         if entries.count == 1 {
