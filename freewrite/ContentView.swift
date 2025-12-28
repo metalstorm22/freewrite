@@ -86,7 +86,6 @@ struct ContentView: View {
     @State private var typewriterMode: TypewriterMode = .normal
     @State private var typewriterHighlight: TypewriterHighlightScope = .line
     @State private var typewriterFixedScroll: Bool = true
-    @State private var typewriterScrollAnchor: TypewriterScrollAnchor = .middle
     @State private var typewriterMarkLine: Bool = true
     @State private var isHoveringTypewriter = false
     let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
@@ -389,6 +388,12 @@ struct ContentView: View {
         let editorTopInset: CGFloat = 24
         let editorBottomInset: CGFloat = 48
         let editorTextInset = CGSize(width: 4, height: 6)
+        let baseFont = NSFont(name: selectedFont, size: fontSize) ?? .systemFont(ofSize: fontSize)
+        let baseLineHeight = getLineHeight(font: baseFont)
+        let activeLineHeight = baseLineHeight + lineHeight
+        let typewriterExtraInset: CGFloat = (typewriterMode == .typewriter && typewriterFixedScroll)
+            ? max(0, (viewHeight - activeLineHeight) / 2)
+            : 0
         
         HStack(spacing: 0) {
             // Main content
@@ -416,7 +421,6 @@ struct ContentView: View {
                         typewriterMode: typewriterMode,
                         highlightScope: typewriterHighlight,
                         fixedScrollEnabled: typewriterFixedScroll,
-                        fixedScrollAnchor: typewriterScrollAnchor,
                         markCurrentLine: typewriterMarkLine
                     )
                     .background(Color(colorScheme == .light ? .white : .black))
@@ -438,7 +442,7 @@ struct ContentView: View {
                                     .font(.custom(selectedFont, size: fontSize))
                                     .foregroundColor(colorScheme == .light ? .gray.opacity(0.5) : .gray.opacity(0.6))
                                     .allowsHitTesting(false)
-                                    .padding(.top, editorTopInset + editorTextInset.height)
+                                    .padding(.top, editorTopInset + editorTextInset.height + typewriterExtraInset)
                                     .padding(.leading, editorTextInset.width)
                             }
                         }, alignment: .topLeading
@@ -564,12 +568,6 @@ struct ContentView: View {
                                 .disabled(typewriterMode == .normal)
                                 Toggle("Fixed Scrolling", isOn: $typewriterFixedScroll)
                                     .disabled(typewriterMode == .normal)
-                                Picker("Position", selection: $typewriterScrollAnchor) {
-                                    ForEach(TypewriterScrollAnchor.allCases) { option in
-                                        Text(option.rawValue).tag(option)
-                                    }
-                                }
-                                .disabled(typewriterMode == .normal || !typewriterFixedScroll)
                                 Toggle("Mark Current Line", isOn: $typewriterMarkLine)
                                     .disabled(typewriterMode == .normal)
                             } label: {

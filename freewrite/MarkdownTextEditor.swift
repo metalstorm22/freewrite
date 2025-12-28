@@ -1,6 +1,18 @@
 import AppKit
 import SwiftUI
 
+final class TypewriterTextView: NSTextView {
+    var usesManualScrolling = false
+
+    override func scrollRangeToVisible(_ range: NSRange) {
+        if usesManualScrolling {
+            return
+        }
+        super.scrollRangeToVisible(range)
+    }
+
+}
+
 enum TypewriterMode: String, CaseIterable, Identifiable {
     case normal = "Normal"
     case typewriter = "Typewriter"
@@ -12,15 +24,6 @@ enum TypewriterHighlightScope: String, CaseIterable, Identifiable {
     case line = "Line"
     case sentence = "Sentence"
     case paragraph = "Paragraph"
-
-    var id: String { rawValue }
-}
-
-enum TypewriterScrollAnchor: String, CaseIterable, Identifiable {
-    case top = "Top"
-    case middle = "Middle"
-    case bottom = "Bottom"
-    case variable = "Variable"
 
     var id: String { rawValue }
 }
@@ -39,7 +42,6 @@ struct MarkdownTextEditor: NSViewRepresentable {
     let typewriterMode: TypewriterMode
     let highlightScope: TypewriterHighlightScope
     let fixedScrollEnabled: Bool
-    let fixedScrollAnchor: TypewriterScrollAnchor
     let markCurrentLine: Bool
 
     func makeCoordinator() -> Coordinator {
@@ -47,7 +49,7 @@ struct MarkdownTextEditor: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let textView = NSTextView()
+        let textView = TypewriterTextView()
         textView.isEditable = true
         textView.isSelectable = true
         textView.isRichText = false
@@ -58,9 +60,12 @@ struct MarkdownTextEditor: NSViewRepresentable {
         textView.textContainer?.lineFragmentPadding = 0
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
+        textView.minSize = NSSize(width: 0, height: 0)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         textView.autoresizingMask = [.width]
         textView.textContainer?.widthTracksTextView = true
         textView.textContainer?.heightTracksTextView = false
+        textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
         textView.isContinuousSpellCheckingEnabled = false
         textView.isAutomaticSpellingCorrectionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
@@ -87,6 +92,9 @@ struct MarkdownTextEditor: NSViewRepresentable {
     func updateNSView(_ nsView: NSScrollView, context: Context) {
         guard let textView = nsView.documentView as? NSTextView else { return }
         context.coordinator.updateParent(self)
+        if let typewriterTextView = textView as? TypewriterTextView {
+            typewriterTextView.usesManualScrolling = typewriterMode == .typewriter && fixedScrollEnabled
+        }
         context.coordinator.updateConfig(
             fontName: fontName,
             fontSize: fontSize,
@@ -97,15 +105,29 @@ struct MarkdownTextEditor: NSViewRepresentable {
             typewriterMode: typewriterMode,
             highlightScope: highlightScope,
             markCurrentLine: markCurrentLine,
-            fixedScrollEnabled: fixedScrollEnabled,
-            fixedScrollAnchor: fixedScrollAnchor
+            fixedScrollEnabled: fixedScrollEnabled
         )
 
         textView.backgroundColor = backgroundColor
         nsView.backgroundColor = backgroundColor
         nsView.automaticallyAdjustsContentInsets = false
         nsView.contentInsets = NSEdgeInsets(top: topInset, left: 0, bottom: bottomInset, right: 0)
-        textView.textContainerInset = NSSize(width: textInset.width, height: textInset.height)
+        let baseFont = NSFont(name: fontName, size: fontSize) ?? .systemFont(ofSize: fontSize)
+        let baseLineHeight = baseFont.ascender - baseFont.descender + baseFont.leading
+        let activeLineHeight = baseLineHeight + lineSpacing
+        let typewriterExtraInset: CGFloat
+        if typewriterMode == .typewriter && fixedScrollEnabled {
+            typewriterExtraInset = max(0, (nsView.contentView.bounds.height - activeLineHeight) / 2)
+        } else {
+            typewriterExtraInset = 0
+        }
+        textView.textContainerInset = NSSize(
+            width: textInset.width,
+            height: textInset.height + typewriterExtraInset
+        )
+        if let textContainer = textView.textContainer {
+            textContainer.containerSize = NSSize(width: nsView.contentSize.width, height: CGFloat.greatestFiniteMagnitude)
+        }
 
         if textView.string != text {
             context.coordinator.isUpdating = true
@@ -116,6 +138,7 @@ struct MarkdownTextEditor: NSViewRepresentable {
         }
 
         context.coordinator.applyHighlighting(to: textView)
+        context.coordinator.refreshFixedScrolling()
     }
 }
 
@@ -123,8 +146,6 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
     private let highlighter = MarkdownHighlighter()
     private var config = MarkdownStyleConfig.defaultConfig()
     private var fixedScrollEnabled = false
-    private var fixedScrollAnchor: TypewriterScrollAnchor = .middle
-    private var variableAnchorOffset: CGFloat?
     weak var textView: NSTextView?
     weak var scrollView: NSScrollView?
     var isUpdating = false
@@ -139,8 +160,7 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
         typewriterMode: TypewriterMode,
         highlightScope: TypewriterHighlightScope,
         markCurrentLine: Bool,
-        fixedScrollEnabled: Bool,
-        fixedScrollAnchor: TypewriterScrollAnchor
+        fixedScrollEnabled: Bool
     ) {
         config = MarkdownStyleConfig(
             fontName: fontName,
@@ -154,10 +174,6 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
             markCurrentLine: markCurrentLine
         )
         self.fixedScrollEnabled = fixedScrollEnabled
-        self.fixedScrollAnchor = fixedScrollAnchor
-        if typewriterMode == .normal {
-            variableAnchorOffset = nil
-        }
     }
 
     func configure(textView: NSTextView) {
@@ -173,7 +189,7 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
         guard !isUpdating else { return }
         isUpdating = true
         applyHighlighting(to: textView)
-        applyFixedScrolling(typing: true)
+        scheduleFixedScrolling()
         isUpdating = false
     }
 
@@ -205,7 +221,7 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
         guard !isUpdating else { return }
         isUpdating = true
         applyHighlighting(to: textView)
-        applyFixedScrolling(typing: false)
+        scheduleFixedScrolling()
         isUpdating = false
     }
 
@@ -258,42 +274,33 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
         return result
     }
 
-    private func applyFixedScrolling(typing: Bool) {
+    func refreshFixedScrolling() {
+        scheduleFixedScrolling()
+    }
+
+    private func scheduleFixedScrolling() {
+        DispatchQueue.main.async { [weak self] in
+            self?.applyFixedScrolling()
+        }
+    }
+
+    private func applyFixedScrolling() {
         guard config.typewriterEnabled else {
-            variableAnchorOffset = nil
             return
         }
         guard fixedScrollEnabled else {
-            variableAnchorOffset = nil
             return
         }
         guard let textView = textView,
               let scrollView = scrollView,
-              let caretRect = caretRect(in: textView) else {
+              let lineRect = currentLineRect(in: textView) else {
             return
         }
 
-        let visibleRect = scrollView.contentView.bounds
-        let anchorOffset: CGFloat
-        switch fixedScrollAnchor {
-        case .variable:
-            guard typing else {
-                variableAnchorOffset = nil
-                return
-            }
-            if variableAnchorOffset == nil {
-                variableAnchorOffset = caretRect.midY - visibleRect.minY
-            }
-            anchorOffset = variableAnchorOffset ?? visibleRect.height * 0.5
-        case .top:
-            anchorOffset = visibleRect.height * 0.25
-        case .middle:
-            anchorOffset = visibleRect.height * 0.5
-        case .bottom:
-            anchorOffset = visibleRect.height * 0.75
-        }
+        let visibleRect = scrollView.documentVisibleRect
+        let anchorOffset = visibleRect.height * 0.5
 
-        let desiredOriginY = caretRect.midY - anchorOffset
+        let desiredOriginY = lineRect.midY - anchorOffset
         let maxOriginY = max(0, textView.bounds.height - visibleRect.height)
         let clampedOriginY = min(max(desiredOriginY, 0), maxOriginY)
 
@@ -303,24 +310,30 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
         }
     }
 
-    private func caretRect(in textView: NSTextView) -> NSRect? {
+    private func currentLineRect(in textView: NSTextView) -> NSRect? {
         guard let layoutManager = textView.layoutManager,
               let textContainer = textView.textContainer else {
             return nil
         }
         let length = textView.string.count
+        layoutManager.ensureLayout(for: textContainer)
+        let selectionRange = textView.selectedRange()
+        if selectionRange.location == length,
+           layoutManager.extraLineFragmentRect.height > 0 {
+            var rect = layoutManager.extraLineFragmentRect
+            rect.origin.x += textView.textContainerOrigin.x
+            rect.origin.y += textView.textContainerOrigin.y
+            return rect
+        }
+
         if length == 0 {
             return nil
         }
-        let selectedRange = textView.selectedRange()
-        let location = min(selectedRange.location, max(0, length - 1))
-        let glyphRange = layoutManager.glyphRange(
-            forCharacterRange: NSRange(location: location, length: 0),
-            actualCharacterRange: nil
-        )
-        var rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
-        rect.origin.x += textView.textContainerInset.width
-        rect.origin.y += textView.textContainerInset.height
+        let location = min(selectionRange.location, max(0, length - 1))
+        let glyphIndex = layoutManager.glyphIndexForCharacter(at: location)
+        var rect = layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
+        rect.origin.x += textView.textContainerOrigin.x
+        rect.origin.y += textView.textContainerOrigin.y
         return rect
     }
 }
@@ -921,8 +934,7 @@ extension MarkdownTextEditor {
                 typewriterMode: parent.typewriterMode,
                 highlightScope: parent.highlightScope,
                 markCurrentLine: parent.markCurrentLine,
-                fixedScrollEnabled: parent.fixedScrollEnabled,
-                fixedScrollAnchor: parent.fixedScrollAnchor
+                fixedScrollEnabled: parent.fixedScrollEnabled
             )
         }
 
