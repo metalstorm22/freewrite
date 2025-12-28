@@ -425,15 +425,13 @@ struct ContentView: View {
                         textInset: editorTextInset,
                         topInset: editorTopInset,
                         bottomInset: editorBottomInset,
+                        contentWidth: 650,
                         typewriterMode: typewriterMode,
                         highlightScope: typewriterHighlight,
                         fixedScrollEnabled: typewriterMode == .typewriter,
                         markCurrentLine: false
                     )
                     .background(Color(colorScheme == .light ? .white : .black))
-                    .frame(maxWidth: 650)
-                    
-          
                     .id("\(selectedFont)-\(fontSize)-\(colorScheme)")
                     .padding(.bottom, bottomNavOpacity > 0 ? navHeight : 0)
                     .ignoresSafeArea()
@@ -443,18 +441,21 @@ struct ContentView: View {
                         // Removed findSubview code which was causing errors
                     }
                     .overlay(
-                        ZStack(alignment: .topLeading) {
-                            if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                Text(placeholderText)
-                                    .font(.custom(selectedFont, size: fontSize))
-                                    .foregroundColor(colorScheme == .light ? .gray.opacity(0.5) : .gray.opacity(0.6))
-                                    .allowsHitTesting(false)
-                                    .padding(.top, editorTopInset + editorTextInset.height + typewriterExtraInset)
-                                    .padding(.leading, editorTextInset.width)
+                        GeometryReader { geo in
+                            let horizontalPadding = max(0, (geo.size.width - 650) / 2)
+                            ZStack(alignment: .topLeading) {
+                                if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                    Text(placeholderText)
+                                        .font(.custom(selectedFont, size: fontSize))
+                                        .foregroundColor(colorScheme == .light ? .gray.opacity(0.5) : .gray.opacity(0.6))
+                                        .allowsHitTesting(false)
+                                        .padding(.top, editorTopInset + editorTextInset.height + typewriterExtraInset)
+                                        .padding(.leading, editorTextInset.width + horizontalPadding)
+                                }
                             }
                         }, alignment: .topLeading
                     )
-                                .onGeometryChange(for: CGFloat.self) { proxy in
+                    .onGeometryChange(for: CGFloat.self) { proxy in
                                     proxy.size.height
                                 } action: { height in
                                     viewHeight = height

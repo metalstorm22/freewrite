@@ -39,6 +39,7 @@ struct MarkdownTextEditor: NSViewRepresentable {
     let textInset: CGSize
     let topInset: CGFloat
     let bottomInset: CGFloat
+    let contentWidth: CGFloat
     let typewriterMode: TypewriterMode
     let highlightScope: TypewriterHighlightScope
     let fixedScrollEnabled: Bool
@@ -60,12 +61,12 @@ struct MarkdownTextEditor: NSViewRepresentable {
         textView.textContainer?.lineFragmentPadding = 0
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
-        textView.minSize = NSSize(width: 0, height: 0)
-        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.minSize = NSSize(width: contentWidth, height: 0)
+        textView.maxSize = NSSize(width: contentWidth, height: CGFloat.greatestFiniteMagnitude)
         textView.autoresizingMask = [.width]
-        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.widthTracksTextView = false
         textView.textContainer?.heightTracksTextView = false
-        textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
+        textView.textContainer?.containerSize = NSSize(width: contentWidth, height: CGFloat.greatestFiniteMagnitude)
         textView.isContinuousSpellCheckingEnabled = true
         textView.isAutomaticSpellingCorrectionEnabled = true
         textView.isAutomaticDashSubstitutionEnabled = false
@@ -77,16 +78,23 @@ struct MarkdownTextEditor: NSViewRepresentable {
         textView.delegate = context.coordinator
         textView.textStorage?.delegate = context.coordinator
 
-        let scrollView = NSScrollView()
+        let scrollView = NSScrollView(frame: .zero)
         scrollView.documentView = textView
         scrollView.drawsBackground = true
         scrollView.backgroundColor = backgroundColor
         scrollView.borderType = .noBorder
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
+        scrollView.scrollerStyle = .overlay
+        scrollView.verticalScrollElasticity = .automatic
         scrollView.hasHorizontalScroller = false
         scrollView.automaticallyAdjustsContentInsets = false
-        scrollView.contentInsets = NSEdgeInsets(top: topInset, left: 0, bottom: bottomInset, right: 0)
+        scrollView.contentInsets = NSEdgeInsets(top: topInset, left: 0, bottom: bottomInset, right: 10)
+        scrollView.scrollerInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 2)
+        if let scroller = scrollView.verticalScroller {
+            scroller.controlSize = .mini
+            scroller.scrollerStyle = .overlay
+        }
 
         context.coordinator.configure(textView: textView)
         return scrollView
@@ -124,12 +132,13 @@ struct MarkdownTextEditor: NSViewRepresentable {
         } else {
             typewriterExtraInset = 0
         }
+        let horizontalPadding = max(0, (nsView.contentView.bounds.width - contentWidth) / 2)
         textView.textContainerInset = NSSize(
-            width: textInset.width,
+            width: textInset.width + horizontalPadding,
             height: textInset.height + typewriterExtraInset
         )
         if let textContainer = textView.textContainer {
-            textContainer.containerSize = NSSize(width: nsView.contentSize.width, height: CGFloat.greatestFiniteMagnitude)
+            textContainer.containerSize = NSSize(width: contentWidth, height: CGFloat.greatestFiniteMagnitude)
         }
 
         if textView.string != text {
