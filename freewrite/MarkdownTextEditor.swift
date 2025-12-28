@@ -56,12 +56,6 @@ final class OverlayScrollView: NSScrollView {
         scheduleHide()
     }
     
-    override func reflectScrolledClipView(_ cView: NSClipView) {
-        showScroller()
-        super.reflectScrolledClipView(cView)
-        scheduleHide()
-    }
-    
     func installTrackingCallbacks() {
         guard let trackingScroller = verticalScroller as? TrackingScroller else { return }
         trackingScroller.onBeginTracking = { [weak self] in
