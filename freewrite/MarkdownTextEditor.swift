@@ -13,6 +13,77 @@ final class TypewriterTextView: NSTextView {
 
 }
 
+final class AutoHideScrollView: NSScrollView {
+    private var hideWorkItem: DispatchWorkItem?
+    private let hideDelay: TimeInterval = 1.2
+    private var isDraggingScroller = false
+    
+    override func scrollWheel(with event: NSEvent) {
+        showScroller()
+        super.scrollWheel(with: event)
+        scheduleHide()
+    }
+    
+    override func mouseDown(with event: NSEvent) {
+        if isEventOnScroller(event) || isEventInScrollerGutter(event) {
+            isDraggingScroller = true
+            hideWorkItem?.cancel()
+            showScroller()
+        }
+        super.mouseDown(with: event)
+    }
+    
+    override func mouseDragged(with event: NSEvent) {
+        if isDraggingScroller {
+            showScroller()
+            hideWorkItem?.cancel()
+        }
+        super.mouseDragged(with: event)
+    }
+    
+    override func mouseUp(with event: NSEvent) {
+        super.mouseUp(with: event)
+        isDraggingScroller = false
+        scheduleHide()
+    }
+
+    private func showScroller() {
+        guard let scroller = verticalScroller else { return }
+        scroller.isHidden = false
+        scroller.animator().alphaValue = 1.0
+    }
+    
+    private func hideScroller() {
+        guard let scroller = verticalScroller else { return }
+        scroller.animator().alphaValue = 0.0
+    }
+    
+    private func scheduleHide() {
+        guard !isDraggingScroller else { return }
+        hideWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.hideScroller()
+        }
+        hideWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + hideDelay, execute: work)
+    }
+    
+    func prepareInitialHide() {
+        hideScroller()
+    }
+    
+    private func isEventOnScroller(_ event: NSEvent) -> Bool {
+        guard let scroller = verticalScroller else { return false }
+        let localPoint = scroller.convert(event.locationInWindow, from: nil)
+        return scroller.bounds.contains(localPoint)
+    }
+    
+    private func isEventInScrollerGutter(_ event: NSEvent) -> Bool {
+        let pointInScrollView = convert(event.locationInWindow, from: nil)
+        return pointInScrollView.x >= bounds.width - 32
+    }
+}
+
 enum TypewriterMode: String, CaseIterable, Identifiable {
     case normal = "Normal"
     case typewriter = "Typewriter"
@@ -78,13 +149,13 @@ struct MarkdownTextEditor: NSViewRepresentable {
         textView.delegate = context.coordinator
         textView.textStorage?.delegate = context.coordinator
 
-        let scrollView = NSScrollView(frame: .zero)
+        let scrollView = AutoHideScrollView(frame: .zero)
         scrollView.documentView = textView
         scrollView.drawsBackground = true
         scrollView.backgroundColor = backgroundColor
         scrollView.borderType = .noBorder
         scrollView.hasVerticalScroller = true
-        scrollView.autohidesScrollers = true
+        scrollView.autohidesScrollers = false
         scrollView.scrollerStyle = .overlay
         scrollView.verticalScrollElasticity = .automatic
         scrollView.hasHorizontalScroller = false
@@ -94,7 +165,9 @@ struct MarkdownTextEditor: NSViewRepresentable {
         if let scroller = scrollView.verticalScroller {
             scroller.controlSize = .mini
             scroller.scrollerStyle = .overlay
+            scroller.alphaValue = 0.0
         }
+        scrollView.prepareInitialHide()
 
         context.coordinator.configure(textView: textView)
         return scrollView
