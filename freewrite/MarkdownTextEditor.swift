@@ -264,6 +264,9 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
     private var preTypewriterVisibleOrigin: NSPoint?
     private var pendingScrollWorkItem: DispatchWorkItem?
     private var lastScrollOriginY: CGFloat?
+    private let unorderedContinuationRegex = try! NSRegularExpression(pattern: #"^(\s*[-*+]\s+)(.*)$"#)
+    private let orderedContinuationRegex = try! NSRegularExpression(pattern: #"^(\s*)(\d+)([.)])\s+(.*)$"#)
+    private let checklistContinuationRegex = try! NSRegularExpression(pattern: #"^(\s*[-*+]\s+\[(?: |x|X)\]\s+)(.*)$"#)
     weak var textView: NSTextView?
     weak var scrollView: NSScrollView?
     var isUpdating = false
@@ -306,6 +309,29 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
         applyHighlighting(to: textView)
         self.textView = textView
         self.scrollView = textView.enclosingScrollView
+    }
+
+    func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
+        guard replacementString == "\n" else { return true }
+        guard !isUpdating else { return true }
+
+        let nsText = textView.string as NSString
+        let lineRange = nsText.lineRange(for: affectedCharRange)
+        let lineString = nsText.substring(with: lineRange)
+        let lineHasTrailingNewline = lineString.hasSuffix("\n")
+        let lineContent = lineHasTrailingNewline ? String(lineString.dropLast()) : lineString
+
+        if handleChecklistContinuation(in: textView, lineRange: lineRange, lineContent: lineContent, affectedRange: affectedCharRange) {
+            return false
+        }
+        if handleOrderedContinuation(in: textView, lineRange: lineRange, lineContent: lineContent, affectedRange: affectedCharRange) {
+            return false
+        }
+        if handleUnorderedContinuation(in: textView, lineRange: lineRange, lineContent: lineContent, affectedRange: affectedCharRange) {
+            return false
+        }
+
+        return true
     }
 
     func textDidChange(_ notification: Notification) {
@@ -407,6 +433,95 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
             }
         }
         return result
+    }
+
+    private func handleChecklistContinuation(
+        in textView: NSTextView,
+        lineRange: NSRange,
+        lineContent: String,
+        affectedRange: NSRange
+    ) -> Bool {
+        let nsLine = lineContent as NSString
+        guard let match = checklistContinuationRegex.firstMatch(in: lineContent, options: [], range: NSRange(location: 0, length: nsLine.length)) else {
+            return false
+        }
+        let prefix = nsLine.substring(with: match.range(at: 1))
+        let content = nsLine.substring(with: match.range(at: 2)).trimmingCharacters(in: .whitespaces)
+        if content.isEmpty {
+            let wasUpdating = isUpdating
+            isUpdating = true
+            textView.insertText("\n", replacementRange: lineRange)
+            isUpdating = wasUpdating
+            return true
+        }
+        let cleanPrefix = prefix.replacingOccurrences(
+            of: #"\[(?: |x|X)\]"#,
+            with: "[ ]",
+            options: .regularExpression
+        )
+        let wasUpdating = isUpdating
+        isUpdating = true
+        textView.insertText("\n\(cleanPrefix)", replacementRange: affectedRange)
+        isUpdating = wasUpdating
+        return true
+    }
+
+    private func handleOrderedContinuation(
+        in textView: NSTextView,
+        lineRange: NSRange,
+        lineContent: String,
+        affectedRange: NSRange
+    ) -> Bool {
+        let nsLine = lineContent as NSString
+        guard let match = orderedContinuationRegex.firstMatch(in: lineContent, options: [], range: NSRange(location: 0, length: nsLine.length)) else {
+            return false
+        }
+        let indent = nsLine.substring(with: match.range(at: 1))
+        let numberString = nsLine.substring(with: match.range(at: 2))
+        let separator = nsLine.substring(with: match.range(at: 3))
+        let content = nsLine.substring(with: match.range(at: 4)).trimmingCharacters(in: .whitespaces)
+
+        if content.isEmpty {
+            let wasUpdating = isUpdating
+            isUpdating = true
+            textView.insertText("\n", replacementRange: lineRange)
+            isUpdating = wasUpdating
+            return true
+        }
+        let nextNumber = (Int(numberString) ?? 0) + 1
+        let continuation = "\n\(indent)\(nextNumber)\(separator) "
+        let wasUpdating = isUpdating
+        isUpdating = true
+        textView.insertText(continuation, replacementRange: affectedRange)
+        isUpdating = wasUpdating
+        return true
+    }
+
+    private func handleUnorderedContinuation(
+        in textView: NSTextView,
+        lineRange: NSRange,
+        lineContent: String,
+        affectedRange: NSRange
+    ) -> Bool {
+        let nsLine = lineContent as NSString
+        guard let match = unorderedContinuationRegex.firstMatch(in: lineContent, options: [], range: NSRange(location: 0, length: nsLine.length)) else {
+            return false
+        }
+        let prefix = nsLine.substring(with: match.range(at: 1))
+        let content = nsLine.substring(with: match.range(at: 2)).trimmingCharacters(in: .whitespaces)
+
+        if content.isEmpty {
+            let wasUpdating = isUpdating
+            isUpdating = true
+            textView.insertText("\n", replacementRange: lineRange)
+            isUpdating = wasUpdating
+            return true
+        }
+        let wasUpdating = isUpdating
+        isUpdating = true
+        textView.insertText("\n\(prefix)", replacementRange: affectedRange)
+        isUpdating = wasUpdating
+        return true
     }
 
     func refreshFixedScrolling() {
@@ -620,11 +735,21 @@ private final class MarkdownHighlighter {
         options: [.anchorsMatchLines]
     )
     private let boldRegex = try! NSRegularExpression(pattern: "\\*\\*([^\\n]+?)\\*\\*")
+    private let italicStarRegex = try! NSRegularExpression(
+        pattern: "(?<!\\*)\\*([^\\n*]+?)\\*(?!\\*)"
+    )
+    private let boldItalicRegex = try! NSRegularExpression(
+        pattern: "(\\*\\*\\*|___)([^\\n]+?)\\1"
+    )
+    private let boldDoubleUnderscoreRegex = try! NSRegularExpression(
+        pattern: "__(?!_)([^\\n]+?)(?<!_)__"
+    )
     private let italicRegex = try! NSRegularExpression(
         pattern: "(?<!\\w)_([^\\n]+?)_(?!\\w)"
     )
     private let markRegex = try! NSRegularExpression(pattern: "::([^\\n]+?)::")
     private let deleteRegex = try! NSRegularExpression(pattern: "\\|\\|([^\\n]+?)\\|\\|")
+    private let strikethroughRegex = try! NSRegularExpression(pattern: "~~([^\\n]+?)~~")
     private let inlineCommentRegex = try! NSRegularExpression(pattern: "\\+\\+([^\\n]+?)\\+\\+")
     private let blockCommentRegex = try! NSRegularExpression(
         pattern: "^(%%\\s*)(.*)$",
@@ -648,6 +773,10 @@ private final class MarkdownHighlighter {
     private let backtickCodeRegex = try! NSRegularExpression(
         pattern: "`([^\\n`]+?)`"
     )
+    private let fencedCodeRegex = try! NSRegularExpression(
+        pattern: "^```\\s*([A-Za-z0-9+\\-]*)\\s*$",
+        options: [.anchorsMatchLines]
+    )
     private let codeBlockRegex = try! NSRegularExpression(
         pattern: "^(\\'\\'\\s*)(.*)$",
         options: [.anchorsMatchLines]
@@ -657,6 +786,18 @@ private final class MarkdownHighlighter {
     )
     private let rawBlockRegex = try! NSRegularExpression(
         pattern: "^(~~\\s*)(.*)$",
+        options: [.anchorsMatchLines]
+    )
+    private let unorderedListRegex = try! NSRegularExpression(
+        pattern: "^(\\s*[-*+]\\s+)(.+)$",
+        options: [.anchorsMatchLines]
+    )
+    private let orderedListRegex = try! NSRegularExpression(
+        pattern: "^(\\s*\\d+[.)]\\s+)(.+)$",
+        options: [.anchorsMatchLines]
+    )
+    private let checklistRegex = try! NSRegularExpression(
+        pattern: "^(\\s*[-*+]\\s+\\[(?: |x|X)\\]\\s+)(.+)$",
         options: [.anchorsMatchLines]
     )
 
@@ -705,6 +846,53 @@ private final class MarkdownHighlighter {
             config: config,
             tokenActiveRange: tokenActiveRange
         )
+        applyLinePattern(
+            unorderedListRegex,
+            text: text,
+            textStorage: textStorage,
+            config: config,
+            tokenActiveRange: tokenActiveRange,
+            lineAttributes: [
+                .paragraphStyle: indentedParagraph(config: config, indent: 16)
+            ],
+            tokenLength: 2,
+            indent: 16,
+            hideTokensWhenInactive: false
+        )
+        applyLinePattern(
+            orderedListRegex,
+            text: text,
+            textStorage: textStorage,
+            config: config,
+            tokenActiveRange: tokenActiveRange,
+            lineAttributes: [
+                .paragraphStyle: indentedParagraph(config: config, indent: 20)
+            ],
+            tokenLength: 2,
+            indent: 20,
+            hideTokensWhenInactive: false
+        )
+        applyLinePattern(
+            checklistRegex,
+            text: text,
+            textStorage: textStorage,
+            config: config,
+            tokenActiveRange: tokenActiveRange,
+            lineAttributes: [
+                .paragraphStyle: indentedParagraph(config: config, indent: 24)
+            ],
+            tokenLength: 4,
+            indent: 24,
+            hideTokensWhenInactive: false
+        )
+        applyInlinePattern(
+            boldItalicRegex,
+            text: text,
+            textStorage: textStorage,
+            config: config,
+            tokenActiveRange: tokenActiveRange,
+            contentAttributes: [.font: withTraits(config.baseFont, traits: [.boldFontMask, .italicFontMask])]
+        )
         applyInlinePattern(
             boldRegex,
             text: text,
@@ -714,7 +902,23 @@ private final class MarkdownHighlighter {
             contentAttributes: [.font: withTraits(config.baseFont, traits: .boldFontMask)]
         )
         applyInlinePattern(
+            boldDoubleUnderscoreRegex,
+            text: text,
+            textStorage: textStorage,
+            config: config,
+            tokenActiveRange: tokenActiveRange,
+            contentAttributes: [.font: withTraits(config.baseFont, traits: .boldFontMask)]
+        )
+        applyInlinePattern(
             italicRegex,
+            text: text,
+            textStorage: textStorage,
+            config: config,
+            tokenActiveRange: tokenActiveRange,
+            contentAttributes: [.font: withTraits(config.baseFont, traits: .italicFontMask)]
+        )
+        applyInlinePattern(
+            italicStarRegex,
             text: text,
             textStorage: textStorage,
             config: config,
@@ -733,6 +937,17 @@ private final class MarkdownHighlighter {
         )
         applyInlinePattern(
             deleteRegex,
+            text: text,
+            textStorage: textStorage,
+            config: config,
+            tokenActiveRange: tokenActiveRange,
+            contentAttributes: [
+                .foregroundColor: config.deletionColor,
+                .strikethroughStyle: NSUnderlineStyle.single.rawValue
+            ]
+        )
+        applyInlinePattern(
+            strikethroughRegex,
             text: text,
             textStorage: textStorage,
             config: config,
@@ -897,6 +1112,13 @@ private final class MarkdownHighlighter {
             text: text,
             textStorage: textStorage,
             config: config,
+            tokenActiveRange: tokenActiveRange,
+            hideTokensWhenInactive: false
+        )
+        applyFencedCodeBlocks(
+            text,
+            textStorage: textStorage,
+            config: config,
             tokenActiveRange: tokenActiveRange
         )
     }
@@ -908,22 +1130,26 @@ private final class MarkdownHighlighter {
         tokenActiveRange: NSRange?
     ) {
         headingRegex.matches(in: text as String, range: NSRange(location: 0, length: text.length)).forEach { match in
-            let prefixRange = match.range(at: 1)
-            let contentRange = match.range(at: 2)
-        let prefixText = text.substring(with: prefixRange)
-        let hashCount = prefixText.filter { $0 == "#" }.count
-        let level = min(max(hashCount, 1), 4)
-            let scale: CGFloat
-            switch level {
-            case 1:
-                scale = 1.6
-            case 2:
-                scale = 1.4
-            case 3:
-                scale = 1.25
-            default:
-                scale = 1.15
-            }
+        let prefixRange = match.range(at: 1)
+        let contentRange = match.range(at: 2)
+    let prefixText = text.substring(with: prefixRange)
+    let hashCount = prefixText.filter { $0 == "#" }.count
+    let level = min(max(hashCount, 1), 6)
+        let scale: CGFloat
+        switch level {
+        case 1:
+            scale = 1.6
+        case 2:
+            scale = 1.4
+        case 3:
+            scale = 1.25
+        case 4:
+            scale = 1.15
+        case 5:
+            scale = 1.1
+        default:
+            scale = 1.05
+        }
 
             let headingFont = withTraits(
                 NSFont(name: config.fontName, size: config.fontSize * scale)
@@ -1019,28 +1245,29 @@ private final class MarkdownHighlighter {
         tokenActiveRange: NSRange?,
         lineAttributes: [NSAttributedString.Key: Any],
         tokenLength: Int,
-        indent: CGFloat = 0
+        indent: CGFloat = 0,
+        hideTokensWhenInactive: Bool = true
     ) {
         regex.matches(in: text as String, range: NSRange(location: 0, length: text.length)).forEach { match in
             let fullRange = match.range(at: 0)
             let prefixRange = match.numberOfRanges > 1 ? match.range(at: 1) : NSRange(location: fullRange.location, length: tokenLength)
-            let isActiveLine = tokenActiveRange.map { NSIntersectionRange(fullRange, $0).length > 0 } ?? false
             textStorage.addAttributes(lineAttributes, range: fullRange)
             if tokenLength > 0, fullRange.length >= tokenLength {
                 textStorage.addAttributes(
                     [
-                        .foregroundColor: tokenColor(config: config, activeRange: tokenActiveRange, tokenRange: prefixRange),
-                        .font: tokenFont(config: config, activeRange: tokenActiveRange, tokenRange: prefixRange)
+                        .foregroundColor: tokenColor(config: config, activeRange: tokenActiveRange, tokenRange: prefixRange, hideWhenInactive: hideTokensWhenInactive),
+                        .font: tokenFont(config: config, activeRange: tokenActiveRange, tokenRange: prefixRange, hideWhenInactive: hideTokensWhenInactive)
                     ],
                     range: prefixRange
                 )
             }
-            if indent > 0, isActiveLine {
-                let paragraph = NSMutableParagraphStyle()
-                paragraph.headIndent = indent
-                paragraph.firstLineHeadIndent = indent
-                paragraph.lineSpacing = config.lineSpacing
-                textStorage.addAttributes([.paragraphStyle: paragraph], range: fullRange)
+            if indent > 0 {
+                textStorage.addAttributes(
+                    [
+                        .paragraphStyle: indentedParagraph(config: config, indent: indent)
+                    ],
+                    range: fullRange
+                )
             }
         }
     }
@@ -1050,29 +1277,104 @@ private final class MarkdownHighlighter {
         text: NSString,
         textStorage: NSTextStorage,
         config: MarkdownStyleConfig,
-        tokenActiveRange: NSRange?
+        tokenActiveRange: NSRange?,
+        hideTokensWhenInactive: Bool = true
     ) {
         regex.matches(in: text as String, range: NSRange(location: 0, length: text.length)).forEach { match in
             textStorage.addAttributes(
                 [
-                    .foregroundColor: tokenColor(config: config, activeRange: tokenActiveRange, tokenRange: match.range),
-                    .font: tokenFont(config: config, activeRange: tokenActiveRange, tokenRange: match.range)
+                    .foregroundColor: tokenColor(config: config, activeRange: tokenActiveRange, tokenRange: match.range, hideWhenInactive: hideTokensWhenInactive),
+                    .font: tokenFont(config: config, activeRange: tokenActiveRange, tokenRange: match.range, hideWhenInactive: hideTokensWhenInactive)
                 ],
                 range: match.range
             )
         }
     }
 
-    private func tokenColor(config: MarkdownStyleConfig, activeRange: NSRange?, tokenRange: NSRange) -> NSColor {
+    private func tokenColor(
+        config: MarkdownStyleConfig,
+        activeRange: NSRange?,
+        tokenRange: NSRange,
+        hideWhenInactive: Bool = true
+    ) -> NSColor {
+        if !hideWhenInactive {
+            return config.tokenColor
+        }
         guard let activeRange else { return config.tokenColor }
         let intersection = NSIntersectionRange(activeRange, tokenRange)
         return intersection.length > 0 ? config.tokenColor : config.hiddenTokenColor
     }
 
-    private func tokenFont(config: MarkdownStyleConfig, activeRange: NSRange?, tokenRange: NSRange) -> NSFont {
+    private func tokenFont(
+        config: MarkdownStyleConfig,
+        activeRange: NSRange?,
+        tokenRange: NSRange,
+        hideWhenInactive: Bool = true
+    ) -> NSFont {
+        if !hideWhenInactive {
+            return config.baseFont
+        }
         guard let activeRange else { return config.baseFont }
         let intersection = NSIntersectionRange(activeRange, tokenRange)
         return intersection.length > 0 ? config.baseFont : config.hiddenTokenFont
+    }
+
+    private func indentedParagraph(config: MarkdownStyleConfig, indent: CGFloat) -> NSParagraphStyle {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = config.lineSpacing
+        paragraph.firstLineHeadIndent = indent
+        paragraph.headIndent = indent
+        return paragraph
+    }
+
+    private func applyFencedCodeBlocks(
+        _ text: NSString,
+        textStorage: NSTextStorage,
+        config: MarkdownStyleConfig,
+        tokenActiveRange: NSRange?
+    ) {
+        let codeAttributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedSystemFont(ofSize: config.fontSize * 0.95, weight: .regular),
+            .foregroundColor: config.codeColor,
+            .backgroundColor: config.codeBackground,
+            .paragraphStyle: config.paragraphStyle
+        ]
+
+        var searchLocation = 0
+        let fullLength = text.length
+
+        while searchLocation < fullLength {
+            let remainingLength = fullLength - searchLocation
+            let searchRange = NSRange(location: searchLocation, length: remainingLength)
+            guard let startMatch = fencedCodeRegex.firstMatch(in: text as String, options: [], range: searchRange) else {
+                break
+            }
+
+            let afterStartLocation = startMatch.range.location + startMatch.range.length
+            guard afterStartLocation < fullLength else { break }
+            let afterStartRange = NSRange(location: afterStartLocation, length: fullLength - afterStartLocation)
+            guard let endMatch = fencedCodeRegex.firstMatch(in: text as String, options: [], range: afterStartRange) else {
+                break
+            }
+
+            let blockLocation = startMatch.range.location
+            let blockLength = endMatch.range.location + endMatch.range.length - blockLocation
+            let blockRange = NSRange(location: blockLocation, length: blockLength)
+
+            textStorage.addAttributes(codeAttributes, range: blockRange)
+
+            [startMatch.range, endMatch.range].forEach { fenceRange in
+                textStorage.addAttributes(
+                    [
+                        .foregroundColor: tokenColor(config: config, activeRange: tokenActiveRange, tokenRange: fenceRange),
+                        .font: tokenFont(config: config, activeRange: tokenActiveRange, tokenRange: fenceRange)
+                    ],
+                    range: fenceRange
+                )
+            }
+
+            searchLocation = endMatch.range.location + endMatch.range.length
+        }
     }
 
     private func withTraits(_ font: NSFont, traits: NSFontTraitMask) -> NSFont {
