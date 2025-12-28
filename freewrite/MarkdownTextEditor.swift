@@ -262,6 +262,8 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
     private var wasTypewriterEnabled = false
     private var pendingResetFromTypewriter = false
     private var preTypewriterVisibleOrigin: NSPoint?
+    private var pendingScrollWorkItem: DispatchWorkItem?
+    private var lastScrollOriginY: CGFloat?
     weak var textView: NSTextView?
     weak var scrollView: NSScrollView?
     var isUpdating = false
@@ -412,9 +414,14 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
     }
 
     private func scheduleFixedScrolling() {
-        DispatchQueue.main.async { [weak self] in
-            self?.applyFixedScrolling()
+        pendingScrollWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.pendingScrollWorkItem = nil
+            self.applyFixedScrolling()
         }
+        pendingScrollWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.016, execute: workItem)
     }
 
     private func applyFixedScrolling() {
@@ -422,52 +429,33 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
         guard fixedScrollEnabled else { return }
         guard let textView = textView,
               let scrollView = scrollView,
-              let lineRect = currentLineRect(in: textView) else { return }
+              let caretRect = caretRect(for: textView.selectedRange(), in: textView) else { return }
 
         let visibleRect = scrollView.documentVisibleRect
         let anchorOffset = visibleRect.height * 0.5
-        let desiredOriginY = lineRect.midY - anchorOffset
+        let desiredOriginY = caretRect.midY - anchorOffset
 
-        let halfLinePadding = max(0, lineRect.height * 0.5)
+        let halfLinePadding = max(0, caretRect.height * 0.5)
         let paddedContentHeight = textView.bounds.height + halfLinePadding
         let maxOriginY = max(0, paddedContentHeight - visibleRect.height)
         let clampedOriginY = min(max(desiredOriginY, 0), maxOriginY)
         let currentOriginX = scrollView.contentView.bounds.origin.x
+        let currentOriginY = scrollView.contentView.bounds.origin.y
         let targetPoint = NSPoint(x: currentOriginX, y: clampedOriginY)
 
-        if abs(visibleRect.minY - clampedOriginY) > 0.5 || abs(visibleRect.minX - targetPoint.x) > 0.5 {
-            scrollView.contentView.scroll(to: targetPoint)
-            scrollView.reflectScrolledClipView(scrollView.contentView)
-        }
-    }
-
-    private func currentLineRect(in textView: NSTextView) -> NSRect? {
-        guard let layoutManager = textView.layoutManager,
-              let textContainer = textView.textContainer else {
-            return nil
-        }
-        let length = textView.string.count
-        layoutManager.ensureLayout(for: textContainer)
-        let selectionRange = textView.selectedRange()
-        if selectionRange.location == length,
-           layoutManager.extraLineFragmentRect.height > 0 {
-            var rect = layoutManager.extraLineFragmentRect
-            rect.origin.x += textView.textContainerOrigin.x
-            rect.origin.y += textView.textContainerOrigin.y
-            return rect
+        guard abs(currentOriginY - clampedOriginY) > 0.5 || abs(visibleRect.minX - targetPoint.x) > 0.5 else {
+            lastScrollOriginY = currentOriginY
+            return
         }
 
-        if length == 0 {
-            return nil
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.12
+            scrollView.contentView.animator().setBoundsOrigin(targetPoint)
         }
-        let location = min(selectionRange.location, max(0, length - 1))
-        let glyphIndex = layoutManager.glyphIndexForCharacter(at: location)
-        var rect = layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
-        rect.origin.x += textView.textContainerOrigin.x
-        rect.origin.y += textView.textContainerOrigin.y
-        return rect
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+        lastScrollOriginY = clampedOriginY
     }
-    
+
     private func resetFromTypewriterMode() {
         guard let textView = textView, let scrollView = scrollView else { return }
         let selectionRange = textView.selectedRange()
