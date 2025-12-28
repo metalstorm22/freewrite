@@ -66,12 +66,14 @@ struct MarkdownTextEditor: NSViewRepresentable {
         textView.textContainer?.widthTracksTextView = true
         textView.textContainer?.heightTracksTextView = false
         textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
-        textView.isContinuousSpellCheckingEnabled = false
-        textView.isAutomaticSpellingCorrectionEnabled = false
+        textView.isContinuousSpellCheckingEnabled = true
+        textView.isAutomaticSpellingCorrectionEnabled = true
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
-        textView.isGrammarCheckingEnabled = false
+        textView.isGrammarCheckingEnabled = true
+        textView.isAutomaticTextCompletionEnabled = true
+        textView.layoutManager?.allowsNonContiguousLayout = false
         textView.delegate = context.coordinator
         textView.textStorage?.delegate = context.coordinator
 
@@ -80,7 +82,8 @@ struct MarkdownTextEditor: NSViewRepresentable {
         scrollView.drawsBackground = true
         scrollView.backgroundColor = backgroundColor
         scrollView.borderType = .noBorder
-        scrollView.hasVerticalScroller = false
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
         scrollView.hasHorizontalScroller = false
         scrollView.automaticallyAdjustsContentInsets = false
         scrollView.contentInsets = NSEdgeInsets(top: topInset, left: 0, bottom: bottomInset, right: 0)
@@ -195,6 +198,17 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
 
     func applyHighlighting(to textView: NSTextView) {
         guard let textStorage = textView.textStorage else { return }
+        if textStorage.length > 20000 {
+            let baseAttributes: [NSAttributedString.Key: Any] = [
+                .font: config.baseFont,
+                .foregroundColor: config.textColor,
+                .paragraphStyle: config.paragraphStyle
+            ]
+            textStorage.setAttributes(baseAttributes, range: NSRange(location: 0, length: textStorage.length))
+            textView.insertionPointColor = config.textColor
+            textView.typingAttributes = baseAttributes
+            return
+        }
         let selectedRanges = textView.selectedRanges
         let tokenActiveRange = activeLineRange(for: textView)
         let computedHighlightRange = highlightRange(for: textView)
