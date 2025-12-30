@@ -268,6 +268,8 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
     private let unorderedContinuationRegex = try! NSRegularExpression(pattern: #"^(\s*[-*+]\s+)(.*)$"#)
     private let orderedContinuationRegex = try! NSRegularExpression(pattern: #"^(\s*)(\d+)([.)])\s+(.*)$"#)
     private let checklistContinuationRegex = try! NSRegularExpression(pattern: #"^(\s*[-*+]\s+\[(?: |x|X)\]\s+)(.*)$"#)
+    private let unorderedItemRegex = try! NSRegularExpression(pattern: #"^(\s*)([-*+])\s+(.*)$"#)
+    private let checklistItemRegex = try! NSRegularExpression(pattern: #"^(\s*)([-*+])\s+\[(?: |x|X)\]\s+(.*)$"#)
     weak var textView: NSTextView?
     weak var scrollView: NSScrollView?
     var isUpdating = false
@@ -398,7 +400,7 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
     }
 
     private func activeLineRange(for textView: NSTextView) -> NSRange? {
-        guard let selectionValue = textView.selectedRanges.first as? NSValue else { return nil }
+        guard let selectionValue = textView.selectedRanges.first else { return nil }
         let selectionRange = selectionValue.rangeValue
         guard selectionRange.location != NSNotFound else { return nil }
         let text = textView.string as NSString
@@ -412,7 +414,7 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
 
     private func highlightRange(for textView: NSTextView) -> NSRange? {
         guard config.typewriterEnabled else { return nil }
-        guard let selectionValue = textView.selectedRanges.first as? NSValue else { return nil }
+        guard let selectionValue = textView.selectedRanges.first else { return nil }
         let selectionRange = selectionValue.rangeValue
         guard selectionRange.location != NSNotFound else { return nil }
         let text = textView.string
@@ -452,24 +454,36 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
         lineContent: String,
         affectedRange: NSRange
     ) -> Bool {
+        let lineString = (textView.string as NSString).substring(with: lineRange)
+        let lineHasTrailingNewline = lineString.hasSuffix("\n")
         let nsLine = lineContent as NSString
-        guard let match = checklistContinuationRegex.firstMatch(in: lineContent, options: [], range: NSRange(location: 0, length: nsLine.length)) else {
+        guard let match = checklistItemRegex.firstMatch(in: lineContent, options: [], range: NSRange(location: 0, length: nsLine.length)) else {
             return false
         }
-        let prefix = nsLine.substring(with: match.range(at: 1))
-        let content = nsLine.substring(with: match.range(at: 2)).trimmingCharacters(in: .whitespaces)
+        let indent = nsLine.substring(with: match.range(at: 1))
+        let marker = nsLine.substring(with: match.range(at: 2))
+        let content = nsLine.substring(with: match.range(at: 3)).trimmingCharacters(in: .whitespaces)
         if content.isEmpty {
             let wasUpdating = isUpdating
             isUpdating = true
-            textView.insertText("\n", replacementRange: lineRange)
+            if let parentIndent = outdentedIndent(from: indent) {
+                let nsText = textView.string as NSString
+                if let parentMarker = previousChecklistListItem(in: nsText, before: lineRange.location, indent: parentIndent) {
+                    let parentLine = "\(parentIndent)\(parentMarker) [ ] "
+                    let replacement = lineHasTrailingNewline ? parentLine + "\n" : parentLine
+                    textView.insertText(replacement, replacementRange: lineRange)
+                    let cursorLocation = lineRange.location + (parentLine as NSString).length
+                    textView.setSelectedRange(NSRange(location: cursorLocation, length: 0))
+                } else {
+                    textView.insertText("\n", replacementRange: lineRange)
+                }
+            } else {
+                textView.insertText("\n", replacementRange: lineRange)
+            }
             isUpdating = wasUpdating
             return true
         }
-        let cleanPrefix = prefix.replacingOccurrences(
-            of: #"\[(?: |x|X)\]"#,
-            with: "[ ]",
-            options: .regularExpression
-        )
+        let cleanPrefix = "\(indent)\(marker) [ ] "
         let wasUpdating = isUpdating
         isUpdating = true
         textView.insertText("\n\(cleanPrefix)", replacementRange: affectedRange)
@@ -548,23 +562,39 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
         lineContent: String,
         affectedRange: NSRange
     ) -> Bool {
+        let lineString = (textView.string as NSString).substring(with: lineRange)
+        let lineHasTrailingNewline = lineString.hasSuffix("\n")
         let nsLine = lineContent as NSString
-        guard let match = unorderedContinuationRegex.firstMatch(in: lineContent, options: [], range: NSRange(location: 0, length: nsLine.length)) else {
+        guard let match = unorderedItemRegex.firstMatch(in: lineContent, options: [], range: NSRange(location: 0, length: nsLine.length)) else {
             return false
         }
-        let prefix = nsLine.substring(with: match.range(at: 1))
-        let content = nsLine.substring(with: match.range(at: 2)).trimmingCharacters(in: .whitespaces)
+        let indent = nsLine.substring(with: match.range(at: 1))
+        let marker = nsLine.substring(with: match.range(at: 2))
+        let content = nsLine.substring(with: match.range(at: 3)).trimmingCharacters(in: .whitespaces)
 
         if content.isEmpty {
             let wasUpdating = isUpdating
             isUpdating = true
-            textView.insertText("\n", replacementRange: lineRange)
+            if let parentIndent = outdentedIndent(from: indent) {
+                let nsText = textView.string as NSString
+                if let parentMarker = previousUnorderedListItem(in: nsText, before: lineRange.location, indent: parentIndent) {
+                    let parentLine = "\(parentIndent)\(parentMarker) "
+                    let replacement = lineHasTrailingNewline ? parentLine + "\n" : parentLine
+                    textView.insertText(replacement, replacementRange: lineRange)
+                    let cursorLocation = lineRange.location + (parentLine as NSString).length
+                    textView.setSelectedRange(NSRange(location: cursorLocation, length: 0))
+                } else {
+                    textView.insertText("\n", replacementRange: lineRange)
+                }
+            } else {
+                textView.insertText("\n", replacementRange: lineRange)
+            }
             isUpdating = wasUpdating
             return true
         }
         let wasUpdating = isUpdating
         isUpdating = true
-        textView.insertText("\n\(prefix)", replacementRange: affectedRange)
+        textView.insertText("\n\(indent)\(marker) ", replacementRange: affectedRange)
         isUpdating = wasUpdating
         return true
     }
@@ -847,6 +877,58 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
                     let numberString = nsLine.substring(with: match.range(at: 2))
                     let separator = nsLine.substring(with: match.range(at: 3))
                     return (Int(numberString) ?? 0, separator)
+                }
+            }
+            if lineRange.location == 0 {
+                break
+            }
+            searchLocation = lineRange.location - 1
+        }
+        return nil
+    }
+
+    private func previousUnorderedListItem(
+        in text: NSString,
+        before location: Int,
+        indent: String
+    ) -> String? {
+        var searchLocation = min(max(location - 1, 0), text.length - 1)
+        while searchLocation >= 0 {
+            let lineRange = text.lineRange(for: NSRange(location: searchLocation, length: 0))
+            let lineContent = lineContent(in: text, range: lineRange)
+            let nsLine = lineContent as NSString
+            let range = NSRange(location: 0, length: nsLine.length)
+            if let match = unorderedItemRegex.firstMatch(in: lineContent, options: [], range: range) {
+                let lineIndent = nsLine.substring(with: match.range(at: 1))
+                if lineIndent == indent {
+                    let marker = nsLine.substring(with: match.range(at: 2))
+                    return marker
+                }
+            }
+            if lineRange.location == 0 {
+                break
+            }
+            searchLocation = lineRange.location - 1
+        }
+        return nil
+    }
+
+    private func previousChecklistListItem(
+        in text: NSString,
+        before location: Int,
+        indent: String
+    ) -> String? {
+        var searchLocation = min(max(location - 1, 0), text.length - 1)
+        while searchLocation >= 0 {
+            let lineRange = text.lineRange(for: NSRange(location: searchLocation, length: 0))
+            let lineContent = lineContent(in: text, range: lineRange)
+            let nsLine = lineContent as NSString
+            let range = NSRange(location: 0, length: nsLine.length)
+            if let match = checklistItemRegex.firstMatch(in: lineContent, options: [], range: range) {
+                let lineIndent = nsLine.substring(with: match.range(at: 1))
+                if lineIndent == indent {
+                    let marker = nsLine.substring(with: match.range(at: 2))
+                    return marker
                 }
             }
             if lineRange.location == 0 {
