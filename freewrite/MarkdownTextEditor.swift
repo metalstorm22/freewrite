@@ -506,6 +506,15 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
                     textView.insertText(replacement, replacementRange: lineRange)
                     let cursorLocation = lineRange.location + (parentLine as NSString).length
                     textView.setSelectedRange(NSRange(location: cursorLocation, length: 0))
+                    if let nextLineStart = nextLineStart(in: textView.string as NSString, from: cursorLocation) {
+                        renumberOrderedList(
+                            in: textView,
+                            startingAt: nextLineStart,
+                            indent: parentIndent,
+                            startingNumber: nextNumber + 1,
+                            separator: parentItem.separator
+                        )
+                    }
                 } else {
                     textView.insertText("\n", replacementRange: lineRange)
                 }
@@ -520,6 +529,15 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
         let wasUpdating = isUpdating
         isUpdating = true
         textView.insertText(continuation, replacementRange: affectedRange)
+        if let nextLineStart = nextLineStart(in: textView.string as NSString, from: textView.selectedRange().location) {
+            renumberOrderedList(
+                in: textView,
+                startingAt: nextLineStart,
+                indent: indent,
+                startingNumber: nextNumber + 1,
+                separator: separator
+            )
+        }
         isUpdating = wasUpdating
         return true
     }
@@ -739,6 +757,77 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
             return String(indent.dropFirst())
         }
         return ""
+    }
+
+    private func nextLineStart(in text: NSString, from location: Int) -> Int? {
+        guard text.length > 0 else { return nil }
+        let safeLocation = min(max(location, 0), max(text.length - 1, 0))
+        let lineRange = text.lineRange(for: NSRange(location: safeLocation, length: 0))
+        let nextLocation = NSMaxRange(lineRange)
+        return nextLocation <= text.length ? nextLocation : nil
+    }
+
+    private func renumberOrderedList(
+        in textView: NSTextView,
+        startingAt location: Int,
+        indent: String,
+        startingNumber: Int,
+        separator: String
+    ) {
+        guard let textStorage = textView.textStorage else { return }
+        let text = textStorage.string as NSString
+        guard location < text.length else { return }
+        var currentLocation = location
+        var number = startingNumber
+        let indentLength = indent.count
+        var replacements: [(range: NSRange, text: String)] = []
+
+        while currentLocation < text.length {
+            let lineRange = text.lineRange(for: NSRange(location: currentLocation, length: 0))
+            let lineContent = lineContent(in: text, range: lineRange)
+            let trimmed = lineContent.trimmingCharacters(in: .whitespaces)
+            let leadingWhitespace = lineContent.prefix { $0 == " " || $0 == "\t" }
+            let leadingCount = leadingWhitespace.count
+
+            if trimmed.isEmpty {
+                if leadingCount <= indentLength {
+                    break
+                }
+                currentLocation = NSMaxRange(lineRange)
+                continue
+            }
+
+            let nsLine = lineContent as NSString
+            let range = NSRange(location: 0, length: nsLine.length)
+            if let match = orderedContinuationRegex.firstMatch(in: lineContent, options: [], range: range) {
+                let lineIndent = nsLine.substring(with: match.range(at: 1))
+                if lineIndent == indent {
+                    let numberRange = match.range(at: 2)
+                    let newNumber = String(number)
+                    if nsLine.substring(with: numberRange) != newNumber {
+                        let replacementRange = NSRange(
+                            location: lineRange.location + numberRange.location,
+                            length: numberRange.length
+                        )
+                        replacements.append((replacementRange, newNumber))
+                    }
+                    number += 1
+                } else if lineIndent.count < indentLength {
+                    break
+                }
+            } else if leadingCount < indentLength {
+                break
+            }
+
+            currentLocation = NSMaxRange(lineRange)
+        }
+
+        guard !replacements.isEmpty else { return }
+        textStorage.beginEditing()
+        for replacement in replacements.reversed() {
+            textStorage.replaceCharacters(in: replacement.range, with: replacement.text)
+        }
+        textStorage.endEditing()
     }
 
     private func previousOrderedListItem(
@@ -1033,15 +1122,15 @@ private final class MarkdownHighlighter {
         options: [.anchorsMatchLines]
     )
     private let unorderedListRegex = try! NSRegularExpression(
-        pattern: "^(\\s*)([-*+]\\s+)(.+)$",
+        pattern: "^(\\s*)([-*+]\\s+)(.*)$",
         options: [.anchorsMatchLines]
     )
     private let orderedListRegex = try! NSRegularExpression(
-        pattern: "^(\\s*)(\\d+[.)]\\s+)(.+)$",
+        pattern: "^(\\s*)(\\d+[.)]\\s+)(.*)$",
         options: [.anchorsMatchLines]
     )
     private let checklistRegex = try! NSRegularExpression(
-        pattern: "^(\\s*)([-*+]\\s+\\[(?: |x|X)\\]\\s+)(.+)$",
+        pattern: "^(\\s*)([-*+]\\s+\\[(?: |x|X)\\]\\s+)(.*)$",
         options: [.anchorsMatchLines]
     )
 
@@ -1518,6 +1607,9 @@ private final class MarkdownHighlighter {
             let fullRange = match.range(at: 0)
             let leadingWhitespaceRange = match.range(at: 1)
             let tokenRange = match.range(at: 2)
+            let contentRange = match.range(at: 3)
+            let contentText = text.substring(with: contentRange)
+            let contentIsEmpty = contentText.trimmingCharacters(in: .whitespaces).isEmpty
             let leadingWhitespaceWidth = whitespaceWidth(
                 in: text,
                 range: leadingWhitespaceRange,
@@ -1534,8 +1626,14 @@ private final class MarkdownHighlighter {
                 range: fullRange
             )
             if tokenRange.length > 0 {
-                textStorage.addAttributes(
-                    [
+                let tokenAttributes: [NSAttributedString.Key: Any]
+                if contentIsEmpty {
+                    tokenAttributes = [
+                        .foregroundColor: config.textColor,
+                        .font: config.baseFont
+                    ]
+                } else {
+                    tokenAttributes = [
                         .foregroundColor: tokenColor(
                             config: config,
                             activeRange: tokenActiveRange,
@@ -1548,9 +1646,9 @@ private final class MarkdownHighlighter {
                             tokenRange: tokenRange,
                             hideWhenInactive: hideTokensWhenInactive
                         )
-                    ],
-                    range: tokenRange
-                )
+                    ]
+                }
+                textStorage.addAttributes(tokenAttributes, range: tokenRange)
             }
         }
     }
