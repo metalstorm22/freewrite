@@ -264,6 +264,7 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
     private var preTypewriterVisibleOrigin: NSPoint?
     private var pendingScrollWorkItem: DispatchWorkItem?
     private var lastScrollOriginY: CGFloat?
+    private let indentUnit = "      "
     private let unorderedContinuationRegex = try! NSRegularExpression(pattern: #"^(\s*[-*+]\s+)(.*)$"#)
     private let orderedContinuationRegex = try! NSRegularExpression(pattern: #"^(\s*)(\d+)([.)])\s+(.*)$"#)
     private let checklistContinuationRegex = try! NSRegularExpression(pattern: #"^(\s*[-*+]\s+\[(?: |x|X)\]\s+)(.*)$"#)
@@ -332,6 +333,16 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
         }
 
         return true
+    }
+
+    func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        if commandSelector == #selector(NSResponder.insertTab(_:)) {
+            return handleIndentation(in: textView, outdent: false)
+        }
+        if commandSelector == #selector(NSResponder.insertBacktab(_:)) {
+            return handleIndentation(in: textView, outdent: true)
+        }
+        return false
     }
 
     func textDidChange(_ notification: Notification) {
@@ -472,6 +483,8 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
         lineContent: String,
         affectedRange: NSRange
     ) -> Bool {
+        let lineString = (textView.string as NSString).substring(with: lineRange)
+        let lineHasTrailingNewline = lineString.hasSuffix("\n")
         let nsLine = lineContent as NSString
         guard let match = orderedContinuationRegex.firstMatch(in: lineContent, options: [], range: NSRange(location: 0, length: nsLine.length)) else {
             return false
@@ -484,7 +497,21 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
         if content.isEmpty {
             let wasUpdating = isUpdating
             isUpdating = true
-            textView.insertText("\n", replacementRange: lineRange)
+            if let parentIndent = outdentedIndent(from: indent) {
+                let nsText = textView.string as NSString
+                if let parentItem = previousOrderedListItem(in: nsText, before: lineRange.location, indent: parentIndent) {
+                    let nextNumber = parentItem.number + 1
+                    let parentLine = "\(parentIndent)\(nextNumber)\(parentItem.separator) "
+                    let replacement = lineHasTrailingNewline ? parentLine + "\n" : parentLine
+                    textView.insertText(replacement, replacementRange: lineRange)
+                    let cursorLocation = lineRange.location + (parentLine as NSString).length
+                    textView.setSelectedRange(NSRange(location: cursorLocation, length: 0))
+                } else {
+                    textView.insertText("\n", replacementRange: lineRange)
+                }
+            } else {
+                textView.insertText("\n", replacementRange: lineRange)
+            }
             isUpdating = wasUpdating
             return true
         }
@@ -522,6 +549,223 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
         textView.insertText("\n\(prefix)", replacementRange: affectedRange)
         isUpdating = wasUpdating
         return true
+    }
+
+    private func handleIndentation(in textView: NSTextView, outdent: Bool) -> Bool {
+        guard let textStorage = textView.textStorage else { return false }
+        if textStorage.length == 0 {
+            if !outdent {
+                textView.insertText(indentUnit, replacementRange: textView.selectedRange())
+            }
+            return true
+        }
+        let nsText = textStorage.string as NSString
+        let selectedRange = textView.selectedRange()
+        let lineRanges = lineRanges(for: selectedRange, in: nsText)
+        guard !lineRanges.isEmpty else { return false }
+
+        if selectedRange.length == 0 {
+            let caretLineRange = lineRanges[0]
+            let lineContent = lineContent(in: nsText, range: caretLineRange)
+            if !isListLine(lineContent), !outdent {
+                textView.insertText(indentUnit, replacementRange: selectedRange)
+                return true
+            }
+        }
+
+        var replacements: [(range: NSRange, text: String)] = []
+        var orderedCounter = 0
+        var previousWasOrdered = false
+
+        for lineRange in lineRanges {
+            let lineString = nsText.substring(with: lineRange)
+            let hasTrailingNewline = lineString.hasSuffix("\n")
+            let lineContent = hasTrailingNewline ? String(lineString.dropLast()) : lineString
+            var updatedLine = lineContent
+
+            if outdent {
+                let removalLength = removableIndentLength(for: updatedLine)
+                guard removalLength > 0 else { continue }
+                updatedLine = String(updatedLine.dropFirst(removalLength))
+            } else {
+                if isOrderedListLine(updatedLine) {
+                    orderedCounter = previousWasOrdered ? orderedCounter + 1 : 1
+                    previousWasOrdered = true
+                    updatedLine = replacingOrderedNumber(in: updatedLine, with: orderedCounter)
+                } else {
+                    previousWasOrdered = false
+                }
+                updatedLine = indentUnit + updatedLine
+            }
+
+            if hasTrailingNewline {
+                updatedLine += "\n"
+            }
+            replacements.append((lineRange, updatedLine))
+        }
+
+        textStorage.beginEditing()
+        var selectionStart = selectedRange.location
+        var selectionEnd = selectedRange.location + selectedRange.length
+        let selectionLength = selectedRange.length
+
+        for replacement in replacements.reversed() {
+            let oldLength = replacement.range.length
+            textStorage.replaceCharacters(in: replacement.range, with: replacement.text)
+            let newLength = (replacement.text as NSString).length
+            let delta = newLength - oldLength
+            if delta != 0 {
+                adjustSelection(
+                    changeLocation: replacement.range.location,
+                    delta: delta,
+                    selectionStart: &selectionStart,
+                    selectionEnd: &selectionEnd,
+                    selectionLength: selectionLength
+                )
+            }
+        }
+
+        textStorage.endEditing()
+        textView.didChangeText()
+        let clampedStart = max(0, selectionStart)
+        let clampedEnd = max(clampedStart, selectionEnd)
+        textView.setSelectedRange(NSRange(location: clampedStart, length: clampedEnd - clampedStart))
+        return true
+    }
+
+    private func lineRanges(for selection: NSRange, in text: NSString) -> [NSRange] {
+        guard text.length > 0 else { return [] }
+        var selectionEnd = selection.location + selection.length
+        if selection.length > 0, selectionEnd > 0 {
+            let previousCharacter = text.character(at: selectionEnd - 1)
+            if previousCharacter == 10 || previousCharacter == 13 {
+                selectionEnd = max(selection.location, selectionEnd - 1)
+            }
+        }
+        let effectiveRange = NSRange(location: selection.location, length: max(0, selectionEnd - selection.location))
+        let coveredRange = text.lineRange(for: effectiveRange)
+        var ranges: [NSRange] = []
+        var currentLocation = coveredRange.location
+        let maxLocation = NSMaxRange(coveredRange)
+        while currentLocation < maxLocation {
+            let range = text.lineRange(for: NSRange(location: currentLocation, length: 0))
+            ranges.append(range)
+            currentLocation = NSMaxRange(range)
+        }
+        return ranges
+    }
+
+    private func lineContent(in text: NSString, range: NSRange) -> String {
+        let lineString = text.substring(with: range)
+        if lineString.hasSuffix("\n") {
+            return String(lineString.dropLast())
+        }
+        return lineString
+    }
+
+    private func isListLine(_ line: String) -> Bool {
+        let nsLine = line as NSString
+        let range = NSRange(location: 0, length: nsLine.length)
+        if unorderedContinuationRegex.firstMatch(in: line, options: [], range: range) != nil {
+            return true
+        }
+        if orderedContinuationRegex.firstMatch(in: line, options: [], range: range) != nil {
+            return true
+        }
+        if checklistContinuationRegex.firstMatch(in: line, options: [], range: range) != nil {
+            return true
+        }
+        return false
+    }
+
+    private func isOrderedListLine(_ line: String) -> Bool {
+        let nsLine = line as NSString
+        let range = NSRange(location: 0, length: nsLine.length)
+        return orderedContinuationRegex.firstMatch(in: line, options: [], range: range) != nil
+    }
+
+    private func replacingOrderedNumber(in line: String, with number: Int) -> String {
+        let nsLine = line as NSString
+        let range = NSRange(location: 0, length: nsLine.length)
+        guard let match = orderedContinuationRegex.firstMatch(in: line, options: [], range: range) else {
+            return line
+        }
+        let numberRange = match.range(at: 2)
+        return nsLine.replacingCharacters(in: numberRange, with: String(number))
+    }
+
+    private func removableIndentLength(for line: String) -> Int {
+        guard !line.isEmpty else { return 0 }
+        if line.hasPrefix("\t") {
+            return 1
+        }
+        let leadingSpaces = line.prefix { $0 == " " }
+        return min(leadingSpaces.count, indentUnit.count)
+    }
+
+    private func adjustSelection(
+        changeLocation: Int,
+        delta: Int,
+        selectionStart: inout Int,
+        selectionEnd: inout Int,
+        selectionLength: Int
+    ) {
+        guard delta != 0 else { return }
+        if changeLocation < selectionStart {
+            selectionStart += delta
+            selectionEnd += delta
+            return
+        }
+        if changeLocation == selectionStart {
+            if selectionLength == 0 {
+                selectionStart += delta
+                selectionEnd += delta
+            } else {
+                selectionEnd += delta
+            }
+            return
+        }
+        if changeLocation > selectionStart && changeLocation <= selectionEnd {
+            selectionEnd += delta
+        }
+    }
+
+    private func outdentedIndent(from indent: String) -> String? {
+        guard !indent.isEmpty else { return nil }
+        if indent.hasPrefix(indentUnit) {
+            return String(indent.dropFirst(indentUnit.count))
+        }
+        if indent.hasPrefix("\t") {
+            return String(indent.dropFirst())
+        }
+        return ""
+    }
+
+    private func previousOrderedListItem(
+        in text: NSString,
+        before location: Int,
+        indent: String
+    ) -> (number: Int, separator: String)? {
+        var searchLocation = min(max(location - 1, 0), text.length - 1)
+        while searchLocation >= 0 {
+            let lineRange = text.lineRange(for: NSRange(location: searchLocation, length: 0))
+            let lineContent = lineContent(in: text, range: lineRange)
+            let nsLine = lineContent as NSString
+            let range = NSRange(location: 0, length: nsLine.length)
+            if let match = orderedContinuationRegex.firstMatch(in: lineContent, options: [], range: range) {
+                let lineIndent = nsLine.substring(with: match.range(at: 1))
+                if lineIndent == indent {
+                    let numberString = nsLine.substring(with: match.range(at: 2))
+                    let separator = nsLine.substring(with: match.range(at: 3))
+                    return (Int(numberString) ?? 0, separator)
+                }
+            }
+            if lineRange.location == 0 {
+                break
+            }
+            searchLocation = lineRange.location - 1
+        }
+        return nil
     }
 
     func refreshFixedScrolling() {
@@ -789,15 +1033,15 @@ private final class MarkdownHighlighter {
         options: [.anchorsMatchLines]
     )
     private let unorderedListRegex = try! NSRegularExpression(
-        pattern: "^(\\s*[-*+]\\s+)(.+)$",
+        pattern: "^(\\s*)([-*+]\\s+)(.+)$",
         options: [.anchorsMatchLines]
     )
     private let orderedListRegex = try! NSRegularExpression(
-        pattern: "^(\\s*\\d+[.)]\\s+)(.+)$",
+        pattern: "^(\\s*)(\\d+[.)]\\s+)(.+)$",
         options: [.anchorsMatchLines]
     )
     private let checklistRegex = try! NSRegularExpression(
-        pattern: "^(\\s*[-*+]\\s+\\[(?: |x|X)\\]\\s+)(.+)$",
+        pattern: "^(\\s*)([-*+]\\s+\\[(?: |x|X)\\]\\s+)(.+)$",
         options: [.anchorsMatchLines]
     )
 
@@ -846,43 +1090,31 @@ private final class MarkdownHighlighter {
             config: config,
             tokenActiveRange: tokenActiveRange
         )
-        applyLinePattern(
+        applyListPattern(
             unorderedListRegex,
             text: text,
             textStorage: textStorage,
             config: config,
             tokenActiveRange: tokenActiveRange,
-            lineAttributes: [
-                .paragraphStyle: indentedParagraph(config: config, indent: 16)
-            ],
-            tokenLength: 2,
-            indent: 16,
+            baseIndent: 16,
             hideTokensWhenInactive: false
         )
-        applyLinePattern(
+        applyListPattern(
             orderedListRegex,
             text: text,
             textStorage: textStorage,
             config: config,
             tokenActiveRange: tokenActiveRange,
-            lineAttributes: [
-                .paragraphStyle: indentedParagraph(config: config, indent: 20)
-            ],
-            tokenLength: 2,
-            indent: 20,
+            baseIndent: 20,
             hideTokensWhenInactive: false
         )
-        applyLinePattern(
+        applyListPattern(
             checklistRegex,
             text: text,
             textStorage: textStorage,
             config: config,
             tokenActiveRange: tokenActiveRange,
-            lineAttributes: [
-                .paragraphStyle: indentedParagraph(config: config, indent: 24)
-            ],
-            tokenLength: 4,
-            indent: 24,
+            baseIndent: 24,
             hideTokensWhenInactive: false
         )
         applyInlinePattern(
@@ -1272,6 +1504,57 @@ private final class MarkdownHighlighter {
         }
     }
 
+    private func applyListPattern(
+        _ regex: NSRegularExpression,
+        text: NSString,
+        textStorage: NSTextStorage,
+        config: MarkdownStyleConfig,
+        tokenActiveRange: NSRange?,
+        baseIndent: CGFloat,
+        hideTokensWhenInactive: Bool = false
+    ) {
+        regex.matches(in: text as String, range: NSRange(location: 0, length: text.length)).forEach { match in
+            guard match.numberOfRanges >= 3 else { return }
+            let fullRange = match.range(at: 0)
+            let leadingWhitespaceRange = match.range(at: 1)
+            let tokenRange = match.range(at: 2)
+            let leadingWhitespaceWidth = whitespaceWidth(
+                in: text,
+                range: leadingWhitespaceRange,
+                font: config.baseFont
+            )
+            textStorage.addAttributes(
+                [
+                    .paragraphStyle: listParagraph(
+                        config: config,
+                        baseIndent: baseIndent,
+                        leadingWhitespaceWidth: leadingWhitespaceWidth
+                    )
+                ],
+                range: fullRange
+            )
+            if tokenRange.length > 0 {
+                textStorage.addAttributes(
+                    [
+                        .foregroundColor: tokenColor(
+                            config: config,
+                            activeRange: tokenActiveRange,
+                            tokenRange: tokenRange,
+                            hideWhenInactive: hideTokensWhenInactive
+                        ),
+                        .font: tokenFont(
+                            config: config,
+                            activeRange: tokenActiveRange,
+                            tokenRange: tokenRange,
+                            hideWhenInactive: hideTokensWhenInactive
+                        )
+                    ],
+                    range: tokenRange
+                )
+            }
+        }
+    }
+
     private func applyTokenPattern(
         _ regex: NSRegularExpression,
         text: NSString,
@@ -1325,6 +1608,24 @@ private final class MarkdownHighlighter {
         paragraph.firstLineHeadIndent = indent
         paragraph.headIndent = indent
         return paragraph
+    }
+
+    private func listParagraph(
+        config: MarkdownStyleConfig,
+        baseIndent: CGFloat,
+        leadingWhitespaceWidth: CGFloat
+    ) -> NSParagraphStyle {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = config.lineSpacing
+        paragraph.firstLineHeadIndent = baseIndent
+        paragraph.headIndent = baseIndent + leadingWhitespaceWidth
+        return paragraph
+    }
+
+    private func whitespaceWidth(in text: NSString, range: NSRange, font: NSFont) -> CGFloat {
+        guard range.length > 0 else { return 0 }
+        let whitespace = text.substring(with: range)
+        return (whitespace as NSString).size(withAttributes: [.font: font]).width
     }
 
     private func applyFencedCodeBlocks(
