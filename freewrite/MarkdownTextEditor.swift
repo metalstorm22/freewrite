@@ -247,6 +247,7 @@ struct MarkdownTextEditor: NSViewRepresentable {
             let selectedRanges = textView.selectedRanges
             textView.string = text
             textView.selectedRanges = selectedRanges
+            context.coordinator.updateTextLength(text.count)
             context.coordinator.isUpdating = false
         }
 
@@ -264,6 +265,8 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
     private var preTypewriterVisibleOrigin: NSPoint?
     private var pendingScrollWorkItem: DispatchWorkItem?
     private var lastScrollOriginY: CGFloat?
+    private var pendingRenumberLocation: Int?
+    private var lastKnownTextLength: Int = 0
     private let indentUnit = "      "
     private let unorderedContinuationRegex = try! NSRegularExpression(pattern: #"^(\s*[-*+]\s+)(.*)$"#)
     private let orderedContinuationRegex = try! NSRegularExpression(pattern: #"^(\s*)(\d+)([.)])\s+(.*)$"#)
@@ -312,10 +315,19 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
         applyHighlighting(to: textView)
         self.textView = textView
         self.scrollView = textView.enclosingScrollView
+        lastKnownTextLength = textView.string.count
     }
 
     func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
-        guard replacementString == "\n" else { return true }
+        guard replacementString == "\n" else {
+            if !isUpdating {
+                let replacement = replacementString ?? ""
+                if replacement.isEmpty {
+                    pendingRenumberLocation = min(affectedCharRange.location, textView.string.count)
+                }
+            }
+            return true
+        }
         guard !isUpdating else { return true }
 
         let nsText = textView.string as NSString
@@ -351,8 +363,17 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
         guard let textView = notification.object as? NSTextView else { return }
         guard !isUpdating else { return }
         isUpdating = true
+        let currentLength = textView.string.count
+        if currentLength < lastKnownTextLength {
+            let selection = textView.selectedRange()
+            if pendingRenumberLocation == nil {
+                pendingRenumberLocation = min(selection.location, currentLength)
+            }
+        }
+        performPendingRenumberIfNeeded(in: textView)
         applyHighlighting(to: textView)
         scheduleFixedScrolling()
+        lastKnownTextLength = textView.string.count
         isUpdating = false
     }
 
@@ -789,6 +810,100 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
         return ""
     }
 
+    private func performPendingRenumberIfNeeded(in textView: NSTextView) {
+        guard let location = pendingRenumberLocation else { return }
+        pendingRenumberLocation = nil
+        renumberOrderedListAfterDeletion(in: textView, from: location)
+    }
+
+    func updateTextLength(_ length: Int) {
+        lastKnownTextLength = length
+    }
+
+    private func renumberOrderedListAfterDeletion(in textView: NSTextView, from location: Int) {
+        let text = textView.string as NSString
+        guard text.length > 0 else { return }
+        let safeLocation = min(max(location, 0), max(text.length - 1, 0))
+        guard let nextItem = orderedListItemAtOrAfter(in: text, from: safeLocation) else { return }
+        let startLocation = listStartLocation(for: nextItem.indent, in: text, from: nextItem.lineRange)
+        renumberOrderedList(
+            in: textView,
+            startingAt: startLocation,
+            indent: nextItem.indent,
+            startingNumber: 1,
+            separator: nextItem.separator
+        )
+    }
+
+    private func orderedListItemAtOrAfter(
+        in text: NSString,
+        from location: Int
+    ) -> (lineRange: NSRange, indent: String, number: Int, separator: String)? {
+        var currentLocation = min(max(location, 0), max(text.length - 1, 0))
+        while currentLocation < text.length {
+            let lineRange = text.lineRange(for: NSRange(location: currentLocation, length: 0))
+            let lineContent = lineContent(in: text, range: lineRange)
+            if let item = orderedListItem(in: lineContent) {
+                return (lineRange, item.indent, item.number, item.separator)
+            }
+            currentLocation = NSMaxRange(lineRange)
+        }
+        return nil
+    }
+
+    private func orderedListItem(in line: String) -> (indent: String, number: Int, separator: String)? {
+        let nsLine = line as NSString
+        let range = NSRange(location: 0, length: nsLine.length)
+        guard let match = orderedContinuationRegex.firstMatch(in: line, options: [], range: range) else {
+            return nil
+        }
+        let indent = nsLine.substring(with: match.range(at: 1))
+        let numberString = nsLine.substring(with: match.range(at: 2))
+        let separator = nsLine.substring(with: match.range(at: 3))
+        return (indent, Int(numberString) ?? 0, separator)
+    }
+
+    private func listStartLocation(for indent: String, in text: NSString, from lineRange: NSRange) -> Int {
+        let indentLength = indent.count
+        var startLocation = lineRange.location
+        guard text.length > 0 else { return startLocation }
+        var searchLocation = lineRange.location
+
+        while searchLocation > 0 {
+            let previousRange = text.lineRange(for: NSRange(location: searchLocation - 1, length: 0))
+            let lineContent = lineContent(in: text, range: previousRange)
+            let trimmed = lineContent.trimmingCharacters(in: .whitespaces)
+            let leadingWhitespace = lineContent.prefix { $0 == " " || $0 == "\t" }
+            let leadingCount = leadingWhitespace.count
+
+            if trimmed.isEmpty {
+                searchLocation = previousRange.location
+                continue
+            }
+
+            if let item = orderedListItem(in: lineContent) {
+                if item.indent == indent {
+                    startLocation = previousRange.location
+                    searchLocation = previousRange.location
+                    continue
+                }
+                if item.indent.count < indentLength {
+                    break
+                }
+                searchLocation = previousRange.location
+                continue
+            }
+
+            if leadingCount <= indentLength {
+                break
+            }
+
+            searchLocation = previousRange.location
+        }
+
+        return startLocation
+    }
+
     private func nextLineStart(in text: NSString, from location: Int) -> Int? {
         guard text.length > 0 else { return nil }
         let safeLocation = min(max(location, 0), max(text.length - 1, 0))
@@ -820,9 +935,6 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
             let leadingCount = leadingWhitespace.count
 
             if trimmed.isEmpty {
-                if leadingCount <= indentLength {
-                    break
-                }
                 currentLocation = NSMaxRange(lineRange)
                 continue
             }
@@ -845,7 +957,7 @@ class MarkdownTextEditorCoordinator: NSObject, NSTextViewDelegate, NSTextStorage
                 } else if lineIndent.count < indentLength {
                     break
                 }
-            } else if leadingCount < indentLength {
+            } else if leadingCount <= indentLength {
                 break
             }
 
@@ -1905,8 +2017,8 @@ extension MarkdownTextEditor {
         override func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
             guard !isUpdating else { return }
-            parent.text = textView.string
             super.textDidChange(notification)
+            parent.text = textView.string
         }
     }
 }
