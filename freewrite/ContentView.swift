@@ -537,12 +537,59 @@ struct ContentView: View {
                             isHoveringHistory = hovering
                         }
                         
-                        Divider()
-                        
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Folders")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundColor(.secondary)
+                            Divider()
+                            
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack(spacing: 6) {
+                                    Text("Folders")
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .foregroundColor(.secondary)
+                                    Spacer()
+                                    
+                                    Button(action: {
+                                        newFolderName = ""
+                                        showingFolderPopover = true
+                                    }) {
+                                        Image(systemName: "folder.badge.plus")
+                                            .font(.system(size: 12, weight: .semibold))
+                                            .foregroundColor(isHoveringNewFolder ? textHoverColor : textColor)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("New folder")
+                                    .onHover { hovering in
+                                        isHoveringNewFolder = hovering
+                                        if hovering {
+                                            NSCursor.pointingHand.push()
+                                        } else {
+                                            NSCursor.pop()
+                                        }
+                                    }
+                                    .popover(isPresented: $showingFolderPopover, arrowEdge: .top) {
+                                        VStack(alignment: .leading, spacing: 10) {
+                                            Text("New Folder")
+                                                .font(.system(size: 13, weight: .semibold))
+                                            TextField("Folder name", text: $newFolderName)
+                                                .textFieldStyle(.roundedBorder)
+                                                .frame(width: 220)
+                                            HStack {
+                                                Button("Cancel") {
+                                                    showingFolderPopover = false
+                                                    newFolderName = ""
+                                                }
+                                                Spacer()
+                                                Button("Create") {
+                                                    createFolder(named: newFolderName)
+                                                    newFolderName = ""
+                                                    showingFolderPopover = false
+                                                }
+                                                .keyboardShortcut(.defaultAction)
+                                            }
+                                        }
+                                        .padding(12)
+                                        .frame(width: 240)
+                                    }
+                                }
+                                
                             
                             VStack(alignment: .leading, spacing: 4) {
                                 let folderButtons: [(FolderSelection, String, String)] = [
@@ -711,15 +758,6 @@ struct ContentView: View {
                                                 }
                                                 
                                                 HStack(spacing: 6) {
-                                                    if folderSelection == .all {
-                                                        Text(entry.displayFolderName)
-                                                            .font(.system(size: 10, weight: .medium))
-                                                            .foregroundColor(.secondary)
-                                                            .padding(.horizontal, 6)
-                                                            .padding(.vertical, 3)
-                                                            .background(Color.gray.opacity(0.08))
-                                                            .cornerRadius(6)
-                                                    }
                                                     Text(entry.date)
                                                         .font(.system(size: 12))
                                                         .foregroundColor(.secondary)
@@ -1215,51 +1253,8 @@ struct ContentView: View {
                         }
                     }
                     
-                    Button(action: {
-                        newFolderName = ""
-                        showingFolderPopover = true
-                    }) {
-                        Image(systemName: "folder.badge.plus")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(isHoveringNewFolder ? textHoverColor : textColor)
-                    }
-                    .buttonStyle(.plain)
-                    .help("New folder")
-                    .onHover { hovering in
-                        isHoveringNewFolder = hovering
-                        if hovering {
-                            NSCursor.pointingHand.push()
-                        } else {
-                            NSCursor.pop()
-                        }
-                    }
-                    .popover(isPresented: $showingFolderPopover, arrowEdge: .bottom) {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("New Folder")
-                                .font(.system(size: 13, weight: .semibold))
-                            TextField("Folder name", text: $newFolderName)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: 220)
-                            HStack {
-                                Button("Cancel") {
-                                    showingFolderPopover = false
-                                    newFolderName = ""
-                                }
-                                Spacer()
-                                Button("Create") {
-                                    createFolder(named: newFolderName)
-                                    newFolderName = ""
-                                    showingFolderPopover = false
-                                }
-                                .keyboardShortcut(.defaultAction)
-                            }
-                        }
-                        .padding(12)
-                        .frame(width: 240)
-                    }
-                    
-                    Spacer()
-                }
+                Spacer()
+            }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(Color(colorScheme == .light ? .white : .black))
