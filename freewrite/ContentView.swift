@@ -1181,11 +1181,12 @@ struct ContentView: View {
                             showingSidebar.toggle()
                         }
                     }) {
-                        Label("List", systemImage: "sidebar.leading")
-                            .font(.system(size: 12, weight: .semibold))
+                        Image(systemName: "sidebar.leading")
+                            .font(.system(size: 14, weight: .semibold))
                             .foregroundColor(isHoveringSidebarToggle ? textHoverColor : textColor)
                     }
                     .buttonStyle(.plain)
+                    .help("Toggle list")
                     .onHover { hovering in
                         isHoveringSidebarToggle = hovering
                         if hovering {
@@ -1198,11 +1199,12 @@ struct ContentView: View {
                     Button(action: {
                         createNewEntry()
                     }) {
-                        Label("New", systemImage: "plus")
-                            .font(.system(size: 12, weight: .semibold))
+                        Image(systemName: "plus")
+                            .font(.system(size: 14, weight: .semibold))
                             .foregroundColor(isHoveringNewEntryTop ? textHoverColor : textColor)
                     }
                     .buttonStyle(.plain)
+                    .help("New entry")
                     .onHover { hovering in
                         isHoveringNewEntryTop = hovering
                         if hovering {
@@ -1216,11 +1218,12 @@ struct ContentView: View {
                         newFolderName = ""
                         showingFolderPopover = true
                     }) {
-                        Label("Folder", systemImage: "folder.badge.plus")
-                            .font(.system(size: 12, weight: .semibold))
+                        Image(systemName: "folder.badge.plus")
+                            .font(.system(size: 14, weight: .semibold))
                             .foregroundColor(isHoveringNewFolder ? textHoverColor : textColor)
                     }
                     .buttonStyle(.plain)
+                    .help("New folder")
                     .onHover { hovering in
                         isHoveringNewFolder = hovering
                         if hovering {
