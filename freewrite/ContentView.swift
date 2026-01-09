@@ -509,27 +509,23 @@ struct ContentView: View {
                 // Offset content down so the top controls sit in padding rather than over the editor
                 if showingSidebar {
                     VStack(spacing: 0) {
-                        Button(action: {
-                            NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: getDocumentsDirectory().path)
-                        }) {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    HStack(spacing: 4) {
-                                        Text("Entries")
-                                            .font(.system(size: 13))
-                                            .foregroundColor(isHoveringHistory ? textHoverColor : textColor)
-                                        Image(systemName: "arrow.up.right")
-                                            .font(.system(size: 10))
-                                            .foregroundColor(isHoveringHistory ? textHoverColor : textColor)
+                            Button(action: {
+                                NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: getDocumentsDirectory().path)
+                            }) {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        HStack(spacing: 4) {
+                                            Text("Library")
+                                                .font(.system(size: 13))
+                                                .foregroundColor(isHoveringHistory ? textHoverColor : textColor)
+                                            Image(systemName: "arrow.up.right")
+                                                .font(.system(size: 10))
+                                                .foregroundColor(isHoveringHistory ? textHoverColor : textColor)
+                                        }
                                     }
-                                    Text(getDocumentsDirectory().path)
-                                        .font(.system(size: 10))
-                                        .foregroundColor(.secondary)
-                                        .lineLimit(1)
+                                    Spacer()
                                 }
-                                Spacer()
                             }
-                        }
                         .buttonStyle(.plain)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 12)
@@ -758,6 +754,15 @@ struct ContentView: View {
                                                 }
                                                 
                                                 HStack(spacing: 6) {
+                                                    if folderSelection == .all {
+                                                        Text(entry.displayFolderName)
+                                                            .font(.system(size: 10, weight: .medium))
+                                                            .foregroundColor(.secondary)
+                                                            .padding(.horizontal, 6)
+                                                            .padding(.vertical, 3)
+                                                            .background(Color.gray.opacity(0.08))
+                                                            .cornerRadius(6)
+                                                    }
                                                     Text(entry.date)
                                                         .font(.system(size: 12))
                                                         .foregroundColor(.secondary)
