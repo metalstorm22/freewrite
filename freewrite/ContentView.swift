@@ -1258,14 +1258,11 @@ struct ContentView: View {
                         }
                     }
                     
-                Spacer()
-            }
+                    Spacer()
+                }
                 .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(Color(colorScheme == .light ? .white : .black))
-                .cornerRadius(6)
+                .padding(.vertical, 6)
                 .padding(.leading, 12)
-                .padding(.top, 0)
             }
             .background(Color(colorScheme == .light ? .white : .black).ignoresSafeArea())
         }
