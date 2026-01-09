@@ -506,6 +506,7 @@ struct ContentView: View {
         
         ZStack(alignment: .topLeading) {
             HStack(spacing: 0) {
+                // Offset content down so the top controls sit in padding rather than over the editor
                 if showingSidebar {
                     VStack(spacing: 0) {
                         Button(action: {
@@ -1173,8 +1174,8 @@ struct ContentView: View {
                     }
                 }
             }
-            
-            VStack(alignment: .leading, spacing: 8) {
+            .padding(.top, 36)
+            .overlay(alignment: .topLeading) {
                 HStack(spacing: 10) {
                     Button(action: {
                         withAnimation(.easeInOut(duration: 0.2)) {
@@ -1256,17 +1257,17 @@ struct ContentView: View {
                         .padding(12)
                         .frame(width: 240)
                     }
+                    
+                    Spacer()
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
-                .background(
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(buttonBackground.opacity(0.9))
-                )
-                .shadow(color: Color.black.opacity(0.08), radius: 8, y: 4)
+                .background(Color(colorScheme == .light ? .white : .black))
+                .cornerRadius(6)
+                .padding(.leading, 12)
+                .padding(.top, 0)
             }
-            .padding(.leading, 16)
-            .padding(.top, 16)
+            .background(Color(colorScheme == .light ? .white : .black).ignoresSafeArea())
         }
         .frame(minWidth: 1100, minHeight: 600)
         .animation(.easeInOut(duration: 0.2), value: showingSidebar)
